@@ -1,0 +1,1973 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文件識別</title>
+    <link rel="icon" type="image/png" href="/static/興宇智能_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --paper: #faf8f5;
+            --paper-dark: #f0ebe4;
+            --ink: #2c2825;
+            --ink-light: #5a5550;
+            --ink-muted: #8a857f;
+            --accent: #c45d3e;
+            --accent-light: #e8d5cf;
+            --success: #4a7c59;
+            --success-light: #dce8df;
+            --info: #4a6b8a;
+            --info-light: #dce4eb;
+            --warning: #b8860b;
+            --warning-light: #f5ecd4;
+            --error: #a14444;
+            --error-light: #f0dede;
+            --shadow: rgba(44, 40, 37, 0.08);
+            --shadow-strong: rgba(44, 40, 37, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            font-size: 118%;
+        }
+
+        body {
+            font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--paper);
+            background-image:
+                radial-gradient(ellipse at 20% 20%, rgba(196, 93, 62, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(74, 124, 89, 0.03) 0%, transparent 50%);
+            min-height: 100vh;
+            color: var(--ink);
+            line-height: 1.6;
+        }
+
+        /* Noise texture overlay */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.3;
+            pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 32px 28px;
+            position: relative;
+        }
+
+        /* Header */
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-family: 'Noto Serif TC', Georgia, serif;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--ink);
+            letter-spacing: 0.05em;
+            margin-bottom: 6px;
+        }
+
+        .header p {
+            font-size: 0.95rem;
+            color: var(--ink-muted);
+            font-weight: 300;
+            letter-spacing: 0.02em;
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            background: white;
+            border: 2px dashed var(--ink-muted);
+            border-radius: 4px;
+            padding: 36px 24px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            margin-bottom: 24px;
+            box-shadow: 0 2px 12px var(--shadow);
+        }
+
+        .drop-zone::before {
+            content: '';
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            right: 8px;
+            bottom: 8px;
+            border: 1px solid transparent;
+            border-radius: 2px;
+            transition: border-color 0.3s ease;
+        }
+
+        .drop-zone:hover {
+            border-color: var(--accent);
+            box-shadow: 0 4px 20px var(--shadow-strong);
+        }
+
+        .drop-zone:hover::before {
+            border-color: var(--accent-light);
+        }
+
+        .drop-zone.dragover {
+            border-color: var(--accent);
+            background: var(--accent-light);
+            transform: scale(1.01);
+        }
+
+        .drop-zone-icon {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto 12px;
+            opacity: 0.7;
+        }
+
+        .drop-zone-icon svg {
+            width: 100%;
+            height: 100%;
+            stroke: var(--ink-light);
+        }
+
+        .drop-zone-text {
+            font-family: 'Noto Serif TC', serif;
+            font-size: 1.1rem;
+            color: var(--ink);
+            margin-bottom: 4px;
+        }
+
+        .drop-zone-hint {
+            font-size: 0.85rem;
+            color: var(--ink-muted);
+            font-weight: 300;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        /* File List */
+        .file-list {
+            margin-bottom: 20px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px 18px;
+            background: white;
+            border-radius: 3px;
+            margin-bottom: 8px;
+            box-shadow: 0 1px 4px var(--shadow);
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .file-item-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .file-item-icon {
+            width: 32px;
+            height: 32px;
+            background: var(--accent-light);
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .file-item-icon svg {
+            width: 18px;
+            height: 18px;
+            stroke: var(--accent);
+        }
+
+        .file-item-name {
+            font-weight: 500;
+            color: var(--ink);
+        }
+
+        .file-item-size {
+            font-size: 0.85rem;
+            color: var(--ink-muted);
+            margin-left: 8px;
+        }
+
+        .file-item-remove {
+            background: none;
+            border: none;
+            color: var(--ink-muted);
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 3px;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .file-item-remove:hover {
+            background: var(--error-light);
+            color: var(--error);
+        }
+
+        .file-item-remove svg {
+            width: 18px;
+            height: 18px;
+        }
+
+        /* Section Title */
+        .section-title {
+            font-family: 'Noto Serif TC', serif;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--ink-light);
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+
+        /* Output Format Options */
+        .format-options {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .format-option {
+            background: white;
+            border: 2px solid transparent;
+            border-radius: 4px;
+            padding: 16px 12px;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            text-align: center;
+            box-shadow: 0 1px 6px var(--shadow);
+            position: relative;
+        }
+
+        .format-option:hover {
+            box-shadow: 0 4px 16px var(--shadow-strong);
+            transform: translateY(-2px);
+        }
+
+        .format-option.selected {
+            border-color: var(--accent);
+            box-shadow: 0 4px 16px rgba(196, 93, 62, 0.15);
+        }
+
+        .format-option.selected::after {
+            content: '';
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 20px;
+            height: 20px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='20 6 9 17 4 12'%3E%3C/polyline%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: center;
+        }
+
+        .format-option input {
+            display: none;
+        }
+
+        .format-icon {
+            width: 40px;
+            height: 40px;
+            margin: 0 auto 8px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .format-icon.pdf { background: var(--success-light); }
+        .format-icon.pdf svg { stroke: var(--success); }
+        .format-icon.md { background: var(--info-light); }
+        .format-icon.md svg { stroke: var(--info); }
+        .format-icon.word { background: var(--accent-light); }
+        .format-icon.word svg { stroke: var(--accent); }
+
+        .format-icon svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .format-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--ink);
+            margin-bottom: 4px;
+        }
+
+        .format-desc {
+            font-size: 0.75rem;
+            color: var(--ink-muted);
+            line-height: 1.4;
+        }
+
+        /* Process Button */
+        .btn-process {
+            width: 100%;
+            padding: 14px 24px;
+            font-family: 'Outfit', sans-serif;
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            background: var(--ink);
+            color: var(--paper);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-process:hover:not(:disabled) {
+            background: var(--accent);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(196, 93, 62, 0.25);
+        }
+
+        .btn-process:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .btn-process.loading {
+            color: transparent;
+        }
+
+        .btn-process.loading::after {
+            content: '';
+            position: absolute;
+            width: 24px;
+            height: 24px;
+            top: 50%;
+            left: 50%;
+            margin: -12px 0 0 -12px;
+            border: 2px solid rgba(250, 248, 245, 0.3);
+            border-top-color: var(--paper);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Jobs Section */
+        .jobs-section {
+            margin-top: 28px;
+            padding-top: 20px;
+            border-top: 1px solid var(--paper-dark);
+        }
+
+        .jobs-header {
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .jobs-header.show {
+            display: flex;
+        }
+
+        .jobs-title {
+            font-family: 'Noto Serif TC', serif;
+            font-size: 1rem;
+            color: var(--ink-light);
+        }
+
+        .jobs-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-action svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .btn-action-download {
+            background: var(--success-light);
+            color: var(--success);
+        }
+
+        .btn-action-download:hover {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-action-clear {
+            background: var(--paper-dark);
+            color: var(--ink-muted);
+        }
+
+        .btn-action-clear:hover {
+            background: var(--error-light);
+            color: var(--error);
+        }
+
+        /* Job Cards */
+        .jobs-container {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .job-card {
+            background: white;
+            border-radius: 4px;
+            padding: 14px 16px;
+            box-shadow: 0 2px 8px var(--shadow);
+            animation: fadeIn 0.3s ease;
+            border-left: 4px solid var(--paper-dark);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .job-card.processing { border-left-color: var(--warning); }
+        .job-card.done { border-left-color: var(--success); }
+        .job-card.error { border-left-color: var(--error); }
+        .job-card.cancelled { border-left-color: var(--ink-muted); }
+
+        .job-card.selected {
+            box-shadow: 0 0 0 2px var(--accent), 0 4px 12px var(--shadow-strong);
+        }
+
+        .job-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 8px;
+        }
+
+        .job-checkbox {
+            width: 18px;
+            height: 18px;
+            accent-color: var(--accent);
+            cursor: pointer;
+        }
+
+        .job-filename {
+            flex: 1;
+            font-weight: 500;
+            color: var(--ink);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .job-format-badge {
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 3px 8px;
+            border-radius: 3px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .job-format-badge.pdf {
+            background: var(--success-light);
+            color: var(--success);
+        }
+
+        .job-format-badge.markdown {
+            background: var(--info-light);
+            color: var(--info);
+        }
+
+        .job-format-badge.word {
+            background: var(--accent-light);
+            color: var(--accent);
+        }
+
+        .job-status {
+            font-size: 0.8rem;
+            font-weight: 500;
+            padding: 4px 10px;
+            border-radius: 20px;
+        }
+
+        .job-status.processing {
+            background: var(--warning-light);
+            color: var(--warning);
+        }
+
+        .job-status.done {
+            background: var(--success-light);
+            color: var(--success);
+        }
+
+        .job-status.error {
+            background: var(--error-light);
+            color: var(--error);
+        }
+
+        .job-status.cancelled {
+            background: var(--paper-dark);
+            color: var(--ink-muted);
+        }
+
+        /* Progress */
+        .job-progress {
+            margin: 16px 0;
+        }
+
+        .progress-bar {
+            height: 4px;
+            background: var(--paper-dark);
+            border-radius: 2px;
+            overflow: hidden;
+            margin-bottom: 8px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--warning));
+            transition: width 0.3s ease;
+            border-radius: 2px;
+        }
+
+        .progress-text {
+            font-size: 0.85rem;
+            color: var(--ink-muted);
+        }
+
+        .btn-cancel {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 12px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            background: var(--warning-light);
+            color: var(--warning);
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-cancel:hover {
+            background: var(--warning);
+            color: white;
+        }
+
+        .btn-cancel svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        /* Result */
+        .job-result {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: var(--success-light);
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+
+        .job-result-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--success);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .job-result-icon svg {
+            width: 20px;
+            height: 20px;
+            stroke: white;
+        }
+
+        .job-result-text h3 {
+            font-weight: 600;
+            color: var(--success);
+            margin-bottom: 2px;
+        }
+
+        .job-result-text p {
+            font-size: 0.85rem;
+            color: var(--ink-muted);
+        }
+
+        .job-buttons {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .btn-download {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-download svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .btn-download.pdf {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn-download.pdf:hover {
+            background: #3d6a4a;
+        }
+
+        .btn-download.markdown {
+            background: var(--info);
+            color: white;
+        }
+
+        .btn-download.markdown:hover {
+            background: #3d5a75;
+        }
+
+        .btn-download.word {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-download.word:hover {
+            background: #a84d32;
+        }
+
+        .btn-secondary {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            background: var(--paper-dark);
+            color: var(--ink-light);
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-secondary:hover {
+            background: var(--ink-muted);
+            color: white;
+        }
+
+        .btn-secondary svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .btn-dismiss {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 10px 16px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            background: transparent;
+            color: var(--ink-muted);
+            border: 1px solid var(--paper-dark);
+            border-radius: 3px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-dismiss:hover {
+            background: var(--error-light);
+            color: var(--error);
+            border-color: var(--error-light);
+        }
+
+        .btn-dismiss svg {
+            width: 16px;
+            height: 16px;
+        }
+
+        .error-message {
+            padding: 16px;
+            background: var(--error-light);
+            border-radius: 4px;
+            color: var(--error);
+            margin-bottom: 16px;
+        }
+
+        /* Batch Actions */
+        .batch-actions {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: var(--ink);
+            border-radius: 8px;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            opacity: 0;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px rgba(44, 40, 37, 0.3);
+            z-index: 900;
+        }
+
+        .batch-actions.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        .batch-count {
+            color: var(--paper);
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .batch-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .batch-btn svg {
+            width: 14px;
+            height: 14px;
+        }
+
+        .batch-btn-download {
+            background: var(--success);
+            color: white;
+        }
+
+        .batch-btn-download:hover {
+            background: #3d6a4a;
+        }
+
+        .batch-btn-dismiss {
+            background: rgba(255, 255, 255, 0.15);
+            color: var(--paper);
+        }
+
+        .batch-btn-dismiss:hover {
+            background: var(--error);
+        }
+
+        .batch-btn-clear {
+            background: transparent;
+            color: rgba(250, 248, 245, 0.6);
+            border: 1px solid rgba(250, 248, 245, 0.2);
+        }
+
+        .batch-btn-clear:hover {
+            background: rgba(250, 248, 245, 0.1);
+            color: var(--paper);
+        }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 24px;
+            background: var(--ink);
+            color: var(--paper);
+            border-radius: 4px;
+            font-weight: 500;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(44, 40, 37, 0.25);
+        }
+
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(44, 40, 37, 0.6);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--paper);
+            border-radius: 8px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 24px 64px rgba(44, 40, 37, 0.3);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--paper-dark);
+        }
+
+        .modal-title {
+            font-family: 'Noto Serif TC', serif;
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--ink);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--ink-muted);
+            font-size: 1.5rem;
+            cursor: pointer;
+            padding: 4px 8px;
+            transition: color 0.2s;
+        }
+
+        .modal-close:hover {
+            color: var(--ink);
+        }
+
+        .modal-body {
+            padding: 24px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .markdown-preview {
+            background: white;
+            padding: 24px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-size: 0.85rem;
+            line-height: 1.7;
+            color: var(--ink-light);
+            border: 1px solid var(--paper-dark);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .container {
+                padding: 40px 16px;
+            }
+
+            .header h1 {
+                font-size: 2rem;
+            }
+
+            .drop-zone {
+                padding: 48px 24px;
+            }
+
+            .format-options {
+                grid-template-columns: 1fr;
+                gap: 12px;
+            }
+
+            .format-option {
+                padding: 20px;
+            }
+
+            .batch-actions {
+                left: 16px;
+                right: 16px;
+                transform: translateX(0) translateY(100px);
+                width: auto;
+            }
+
+            .batch-actions.show {
+                transform: translateX(0) translateY(0);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>文件識別</h1>
+            <p>將掃描檔或圖片 PDF 轉換為可編輯格式</p>
+        </header>
+
+        <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="12" y1="18" x2="12" y2="12"></line>
+                    <line x1="9" y1="15" x2="15" y2="15"></line>
+                </svg>
+            </div>
+            <div class="drop-zone-text">拖曳 PDF 檔案至此</div>
+            <div class="drop-zone-hint">或點擊選擇檔案</div>
+            <input type="file" class="file-input" id="fileInput" accept=".pdf" multiple>
+        </div>
+
+        <div class="file-list" id="fileList"></div>
+
+        <div class="section-title">輸出格式</div>
+        <div class="format-options">
+            <label class="format-option" id="modePdf">
+                <input type="checkbox" name="outputMode" value="pdf">
+                <div class="format-icon pdf">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                    </svg>
+                </div>
+                <div class="format-title">可選取 PDF</div>
+                <div class="format-desc">保留原版面，可複製文字</div>
+            </label>
+            <label class="format-option" id="modeMarkdown">
+                <input type="checkbox" name="outputMode" value="markdown">
+                <div class="format-icon md">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                        <polyline points="7 15 10 12 7 9"></polyline>
+                        <line x1="14" y1="15" x2="17" y2="15"></line>
+                    </svg>
+                </div>
+                <div class="format-title">Markdown</div>
+                <div class="format-desc">結構化純文字</div>
+            </label>
+            <label class="format-option" id="modeWord">
+                <input type="checkbox" name="outputMode" value="word">
+                <div class="format-icon word">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <path d="M9 15l2 2 4-4"></path>
+                    </svg>
+                </div>
+                <div class="format-title">Word</div>
+                <div class="format-desc">可編輯文件</div>
+            </label>
+        </div>
+
+        <button class="btn-process" id="processBtn" disabled>開始轉換</button>
+
+        <section class="jobs-section">
+            <div class="jobs-header" id="jobsHeader">
+                <span class="jobs-title" id="jobsTitle">轉換結果</span>
+                <div class="jobs-actions">
+                    <button class="btn-action btn-action-download" onclick="downloadAllCompleted()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        全部下載
+                    </button>
+                    <button class="btn-action btn-action-clear" onclick="dismissAllCompleted()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        清除全部
+                    </button>
+                </div>
+            </div>
+            <div class="jobs-container" id="jobsContainer"></div>
+        </section>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <div class="batch-actions" id="batchActions">
+        <span class="batch-count" id="batchCount">已選取 0 項</span>
+        <button class="batch-btn batch-btn-download" onclick="batchDownload()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            下載
+        </button>
+        <button class="batch-btn batch-btn-dismiss" onclick="batchDismiss()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+            移除
+        </button>
+        <button class="batch-btn batch-btn-clear" onclick="clearSelection()">取消選取</button>
+    </div>
+
+    <div class="modal" id="previewModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title" id="modalTitle">內容預覽</span>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <pre class="markdown-preview" id="markdownContent"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const processBtn = document.getElementById('processBtn');
+        const jobsContainer = document.getElementById('jobsContainer');
+        const toast = document.getElementById('toast');
+        const modePdf = document.getElementById('modePdf');
+        const modeWord = document.getElementById('modeWord');
+        const modeMarkdown = document.getElementById('modeMarkdown');
+        const previewModal = document.getElementById('previewModal');
+        const batchActions = document.getElementById('batchActions');
+        const batchCount = document.getElementById('batchCount');
+        const jobsHeader = document.getElementById('jobsHeader');
+        const jobsTitle = document.getElementById('jobsTitle');
+
+        const JOB_STORAGE_KEY = 'pdfOcrJobs';
+        const JOB_STORAGE_VERSION = 2;
+
+        let selectedFiles = [];
+        let activeJobs = {};
+        let selectedModes = new Set();
+        let selectedJobs = new Set();
+        let csrfToken = null;
+        let jobOrder = [];
+        let saveJobsTimer = null;
+
+        // Fetch CSRF token on page load
+        fetch('/api/csrf-token')
+            .then(r => r.json())
+            .then(d => { csrfToken = d.csrf_token; })
+            .catch(e => console.error('Failed to fetch CSRF token:', e));
+
+        // HTML escape function to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // SVG Icons
+        const icons = {
+            file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
+            x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`,
+            download: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>`,
+            eye: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>`,
+            check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`,
+            stop: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`,
+            trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`
+        };
+
+        // Load jobs from localStorage
+        function normalizeProgress(progress) {
+            if (!progress || typeof progress !== 'object') return null;
+            const current = Number.isFinite(progress.current) ? progress.current : 0;
+            const total = Number.isFinite(progress.total) ? progress.total : 0;
+            const percent = Number.isFinite(progress.percent) ? progress.percent : 0;
+            const message = typeof progress.message === 'string' ? progress.message : '處理中...';
+            const status = typeof progress.status === 'string' ? progress.status : '';
+            return { current, total, percent, message, status };
+        }
+
+        function ensureJobOrder(jobId) {
+            if (!jobOrder.includes(jobId)) {
+                jobOrder.push(jobId);
+            }
+        }
+
+        function pruneJobOrder() {
+            const keep = new Set(Object.keys(activeJobs));
+            jobOrder = jobOrder.filter(jobId => keep.has(jobId));
+        }
+
+        function scheduleJobsSave() {
+            if (saveJobsTimer) return;
+            saveJobsTimer = setTimeout(() => {
+                saveJobsTimer = null;
+                saveJobsToStorage();
+            }, 300);
+        }
+
+        function loadJobsFromStorage() {
+            try {
+                const stored = localStorage.getItem(JOB_STORAGE_KEY);
+                if (!stored) return;
+
+                const payload = JSON.parse(stored);
+                const storedJobs = Array.isArray(payload?.jobs) ? payload.jobs : payload;
+
+                if (!Array.isArray(storedJobs)) return;
+
+                jobOrder = [];
+                storedJobs.forEach(item => {
+                    if (!item) return;
+                    if (typeof item === 'string') {
+                        const jobId = item;
+                        const job = {
+                            job_id: jobId,
+                            filename: '重新連線中...',
+                            status: 'processing',
+                            mode: 'unknown',
+                            progress: { percent: 0, message: '重新連線中...', status: 'waiting' }
+                        };
+                        activeJobs[jobId] = job;
+                        ensureJobOrder(jobId);
+                        renderJobCard(jobId, job);
+                        return;
+                    }
+                    const jobId = item.job_id || item.id;
+                    if (!jobId) return;
+                    const job = {
+                        job_id: jobId,
+                        filename: item.filename || '未命名檔案',
+                        status: item.status || 'processing',
+                        mode: item.mode || 'ocr',
+                        progress: normalizeProgress(item.progress) || { percent: 0, message: '重新連線中...' }
+                    };
+                    activeJobs[jobId] = job;
+                    ensureJobOrder(jobId);
+                    renderJobCard(jobId, job);
+                });
+
+                jobOrder.forEach(jobId => pollJobStatus(jobId));
+                updateJobsHeader();
+            } catch (e) {
+                console.error('Error loading jobs:', e);
+            }
+        }
+
+        function saveJobsToStorage() {
+            try {
+                pruneJobOrder();
+                const jobsPayload = jobOrder.map(jobId => {
+                    const job = activeJobs[jobId];
+                    if (!job) return null;
+                    return {
+                        job_id: jobId,
+                        filename: job.filename || '',
+                        status: job.status || 'processing',
+                        mode: job.mode || 'ocr',
+                        progress: normalizeProgress(job.progress)
+                    };
+                }).filter(Boolean);
+
+                localStorage.setItem(JOB_STORAGE_KEY, JSON.stringify({
+                    version: JOB_STORAGE_VERSION,
+                    jobs: jobsPayload
+                }));
+            } catch (e) {
+                console.error('Error saving jobs:', e);
+            }
+        }
+
+        function removeJobFromStorage(jobId) {
+            delete activeJobs[jobId];
+            pruneJobOrder();
+            scheduleJobsSave();
+        }
+
+        // Note: loadJobsFromStorage() is called after pollJobStatus is defined (see below)
+
+        // Handle visibility change - refresh all processing jobs when tab becomes visible
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                // Tab became visible - immediately poll all processing jobs
+                Object.entries(activeJobs).forEach(([jobId, job]) => {
+                    if (job.status === 'processing') {
+                        // Reset stale count since we're back
+                        if (pollingState[jobId]) {
+                            pollingState[jobId].staleCount = 0;
+                        }
+                        pollJobStatus(jobId);
+                    }
+                });
+            }
+        });
+
+        // Also refresh when the window regains focus (covers refresh + return)
+        window.addEventListener('focus', () => {
+            Object.entries(activeJobs).forEach(([jobId, job]) => {
+                if (job.status === 'processing') {
+                    if (pollingState[jobId]) {
+                        pollingState[jobId].staleCount = 0;
+                    }
+                    pollJobStatus(jobId);
+                }
+            });
+        });
+
+        // Mode selection - use checkbox change event for accessibility
+        function handleModeChange(checkbox, mode, element) {
+            if (checkbox.checked) {
+                selectedModes.add(mode);
+                element.classList.add('selected');
+            } else {
+                selectedModes.delete(mode);
+                element.classList.remove('selected');
+            }
+            updateProcessButton();
+        }
+
+        // Listen on checkbox change (keyboard accessible) instead of label click
+        const pdfCheckbox = modePdf.querySelector('input[type="checkbox"]');
+        const markdownCheckbox = modeMarkdown.querySelector('input[type="checkbox"]');
+        const wordCheckbox = modeWord.querySelector('input[type="checkbox"]');
+
+        pdfCheckbox.addEventListener('change', () => handleModeChange(pdfCheckbox, 'pdf', modePdf));
+        markdownCheckbox.addEventListener('change', () => handleModeChange(markdownCheckbox, 'markdown', modeMarkdown));
+        wordCheckbox.addEventListener('change', () => handleModeChange(wordCheckbox, 'word', modeWord));
+
+        // File handling
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZone.classList.remove('dragover'); handleFiles(e.dataTransfer.files); });
+        fileInput.addEventListener('change', (e) => handleFiles(e.target.files));
+
+        // Generate unique key for file based on name, size, and lastModified
+        function getFileKey(file) {
+            return `${file.name}|${file.size}|${file.lastModified}`;
+        }
+
+        function handleFiles(files) {
+            for (const file of files) {
+                if (file.type === 'application/pdf') {
+                    // Use name+size+lastModified to detect true duplicates
+                    // This allows same-named files from different directories
+                    const isDuplicate = selectedFiles.some(f => getFileKey(f) === getFileKey(file));
+                    if (!isDuplicate) {
+                        selectedFiles.push(file);
+                    }
+                }
+            }
+            renderFileList();
+            updateProcessButton();
+        }
+
+        function renderFileList() {
+            fileList.innerHTML = selectedFiles.map((file, index) => `
+                <div class="file-item">
+                    <div class="file-item-info">
+                        <div class="file-item-icon">${icons.file}</div>
+                        <span class="file-item-name">${escapeHtml(file.name)}</span>
+                        <span class="file-item-size">${formatFileSize(file.size)}</span>
+                    </div>
+                    <button class="file-item-remove" onclick="removeFile(${index})">${icons.x}</button>
+                </div>
+            `).join('');
+        }
+
+        function removeFile(index) {
+            selectedFiles.splice(index, 1);
+            renderFileList();
+            updateProcessButton();
+        }
+
+        function updateProcessButton() {
+            processBtn.disabled = selectedFiles.length === 0 || selectedModes.size === 0;
+        }
+
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        function updateBatchActions() {
+            const count = selectedJobs.size;
+            if (count > 0) {
+                batchCount.textContent = `已選取 ${count} 項`;
+                batchActions.classList.add('show');
+            } else {
+                batchActions.classList.remove('show');
+            }
+        }
+
+        function updateJobsHeader() {
+            const completed = Object.values(activeJobs).filter(j => j.status === 'done').length;
+            const total = Object.keys(activeJobs).length;
+
+            if (total > 0) {
+                jobsHeader.classList.add('show');
+                jobsTitle.textContent = completed > 0 ? `${completed} 項已完成` : '處理中...';
+            } else {
+                jobsHeader.classList.remove('show');
+            }
+        }
+
+        function getCompletedJobIds() {
+            return Object.entries(activeJobs).filter(([_, j]) => j.status === 'done').map(([id]) => id);
+        }
+
+        async function downloadAllCompleted() {
+            const jobIds = getCompletedJobIds();
+            if (!jobIds.length) return;
+
+            for (const jobId of jobIds) {
+                const job = activeJobs[jobId];
+                if (job?.result) {
+                    const result = job.result;
+                    const nameParam = result.original_name ? `?name=${encodeURIComponent(result.original_name)}` : '';
+                    let url = job.mode === 'ocr'
+                        ? `/api/download/${result.download_id}${nameParam}`
+                        : job.mode === 'markdown'
+                            ? `/api/download/markdown/${result.download_id}${nameParam}`
+                            : `/api/download/word/${result.download_id}${nameParam}`;
+
+                    await new Promise(r => setTimeout(r, 200));
+                    const link = document.createElement('a');
+                    link.href = url;
+                    const baseName = result.original_name ? result.original_name.replace(/\.[^/.]+$/, '') : result.download_id;
+                    link.download = job.mode === 'ocr' ? result.original_name : `${baseName}.${job.mode === 'markdown' ? 'zip' : 'docx'}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+
+            for (const jobId of jobIds) {
+                animateRemove(jobId);
+                removeJobFromStorage(jobId);
+                selectedJobs.delete(jobId);
+            }
+            updateBatchActions();
+            updateJobsHeader();
+            showToast(`開始下載 ${jobIds.length} 個檔案`);
+        }
+
+        async function dismissAllCompleted() {
+            const jobIds = getCompletedJobIds();
+            if (!jobIds.length) return;
+
+            const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+            for (const jobId of jobIds) {
+                const downloadId = activeJobs[jobId]?.result?.download_id;
+                animateRemove(jobId);
+                if (downloadId) {
+                    try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+                }
+                removeJobFromStorage(jobId);
+                selectedJobs.delete(jobId);
+            }
+            updateBatchActions();
+            updateJobsHeader();
+            showToast(`已清除 ${jobIds.length} 項`);
+        }
+
+        function animateRemove(jobId) {
+            const card = document.getElementById(`job-${jobId}`);
+            if (card) {
+                card.style.transition = 'opacity 0.3s, transform 0.3s';
+                card.style.opacity = '0';
+                card.style.transform = 'translateX(20px)';
+                setTimeout(() => card.remove(), 300);
+            }
+        }
+
+        function toggleJobSelection(jobId, event) {
+            if (event) event.stopPropagation();
+            const card = document.getElementById(`job-${jobId}`);
+            const checkbox = card?.querySelector('.job-checkbox');
+
+            if (selectedJobs.has(jobId)) {
+                selectedJobs.delete(jobId);
+                card?.classList.remove('selected');
+                if (checkbox) checkbox.checked = false;
+            } else {
+                selectedJobs.add(jobId);
+                card?.classList.add('selected');
+                if (checkbox) checkbox.checked = true;
+            }
+            updateBatchActions();
+        }
+
+        function getStatusText(status, progress) {
+            if (status === 'processing') {
+                if (progress?.status === 'waiting') return '等待中';
+                return '處理中';
+            }
+            return { done: '完成', error: '失敗', cancelled: '已取消' }[status] || status;
+        }
+
+        function formatProgressText(job) {
+            if (job.status !== 'processing') return '';
+            const progress = job.progress || {};
+            if (progress.message) return progress.message;
+            if (progress.status === 'waiting') return '等待其他任務完成...';
+            return '處理中...';
+        }
+
+        function renderJobCard(jobId, job) {
+            const existingCard = document.getElementById(`job-${jobId}`);
+            const wasSelected = selectedJobs.has(jobId);
+
+            const statusText = getStatusText(job.status, job.progress);
+            const formatLabels = { ocr: 'PDF', markdown: 'MD', word: 'Word' };
+            const formatClasses = { ocr: 'pdf', markdown: 'markdown', word: 'word' };
+            const formatLabel = formatLabels[job.mode];
+            const formatClass = formatClasses[job.mode];
+            const formatBadgeHtml = formatLabel
+                ? `<span class="job-format-badge ${formatClass || ''}">${formatLabel}</span>`
+                : '';
+
+            // For processing cards that already exist, only update progress to avoid animation flicker
+            if (existingCard && job.status === 'processing' && existingCard.classList.contains('processing')) {
+                const progressFill = existingCard.querySelector('.progress-fill');
+                const progressText = existingCard.querySelector('.progress-text');
+                const filenameWrap = existingCard.querySelector('.job-filename');
+                if (progressFill && job.progress) {
+                    const percent = job.progress.percent || 0;
+                    progressFill.style.width = `${percent}%`;
+                    // Force repaint to ensure animation is visible
+                    progressFill.offsetHeight;
+                }
+                if (progressText && job.progress) {
+                    const msg = formatProgressText(job);
+                    if (progressText.textContent !== msg) {
+                        progressText.textContent = msg;
+                    }
+                }
+                if (filenameWrap) {
+                    const nextFilename = `${escapeHtml(job.filename)}${formatBadgeHtml ? ` ${formatBadgeHtml}` : ''}`;
+                    if (filenameWrap.innerHTML !== nextFilename) {
+                        filenameWrap.innerHTML = nextFilename;
+                    }
+                }
+                const statusBadge = existingCard.querySelector('.job-status');
+                if (statusBadge && statusBadge.textContent !== statusText) {
+                    statusBadge.textContent = statusText;
+                }
+                return;
+            }
+
+            // If card exists but status changed from processing, force full re-render
+            if (existingCard && job.status !== 'processing') {
+                existingCard.remove();
+            }
+
+            let progressHtml = '';
+            if (job.status === 'processing') {
+                const progress = job.progress || {};
+                progressHtml = `
+                    <div class="job-progress">
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${progress.percent || 0}%"></div>
+                        </div>
+                        <div class="progress-text">${formatProgressText(job)}</div>
+                    </div>
+                    <button class="btn-cancel" onclick="cancelJob('${jobId}')">
+                        ${icons.stop} 取消
+                    </button>
+                `;
+            }
+
+            let resultHtml = '';
+            if (job.status === 'done' && job.result) {
+                const r = job.result;
+                const mode = job.mode;
+                const nameParam = r.original_name ? `?name=${encodeURIComponent(r.original_name)}` : '';
+                const downloadUrl = mode === 'ocr'
+                    ? `/api/download/${r.download_id}${nameParam}`
+                    : mode === 'markdown'
+                        ? `/api/download/markdown/${r.download_id}${nameParam}`
+                        : `/api/download/word/${r.download_id}${nameParam}`;
+                const baseName = r.original_name ? r.original_name.replace(/\.[^/.]+$/, '') : r.download_id;
+                const filename = mode === 'ocr' ? r.original_name : `${baseName}.${mode === 'markdown' ? 'zip' : 'docx'}`;
+                const pageInfo = r.total_pages + ' 頁' + (r.images_count > 0 ? `，${r.images_count} 張圖片` : '');
+
+                resultHtml = `
+                    <div class="job-result">
+                        <div class="job-result-icon">${icons.check}</div>
+                        <div class="job-result-text">
+                            <h3>轉換完成</h3>
+                            <p>${pageInfo}</p>
+                        </div>
+                    </div>
+                    <div class="job-buttons">
+                        <button class="btn-download ${formatClasses[mode]}" onclick="downloadFile('${jobId}', '${downloadUrl}', '${filename}')">
+                            ${icons.download} 下載
+                        </button>
+                        ${mode === 'markdown' ? `<button class="btn-secondary" onclick="previewMarkdown('${r.download_id}')">${icons.eye} 預覽</button>` : ''}
+                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', '${r.download_id}')">
+                            ${icons.trash} 移除
+                        </button>
+                    </div>
+                `;
+            }
+
+            if (job.status === 'error') {
+                resultHtml = `
+                    <div class="error-message">${job.error || '處理時發生錯誤'}</div>
+                    <div class="job-buttons">
+                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', null)">${icons.trash} 移除</button>
+                    </div>
+                `;
+            }
+
+            if (job.status === 'cancelled') {
+                resultHtml = `
+                    <div class="job-buttons">
+                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', null)">${icons.trash} 移除</button>
+                    </div>
+                `;
+            }
+
+            const checkboxHtml = job.status === 'done'
+                ? `<input type="checkbox" class="job-checkbox" ${wasSelected ? 'checked' : ''} onclick="toggleJobSelection('${jobId}', event)">`
+                : '';
+
+            const cardHtml = `
+                <div class="job-card ${job.status} ${wasSelected ? 'selected' : ''}" id="job-${jobId}">
+                    <div class="job-header">
+                        ${checkboxHtml}
+                        <span class="job-filename">
+                            ${escapeHtml(job.filename)}${formatBadgeHtml ? ` ${formatBadgeHtml}` : ''}
+                        </span>
+                        <span class="job-status ${job.status}">${statusText}</span>
+                    </div>
+                    ${progressHtml}
+                    ${resultHtml}
+                </div>
+            `;
+
+            if (existingCard && existingCard.parentNode) {
+                existingCard.outerHTML = cardHtml;
+            } else {
+                // Card doesn't exist or was removed - insert new card
+                jobsContainer.insertAdjacentHTML('beforeend', cardHtml);
+            }
+        }
+
+        // Track polling state to detect stalls
+        const pollingState = {};
+
+        async function pollJobStatus(jobId) {
+            // Initialize polling state
+            if (!pollingState[jobId]) {
+                pollingState[jobId] = {
+                    lastProgress: null,
+                    staleCount: 0,
+                    errorCount: 0,
+                    startTime: Date.now(),
+                    inFlight: false,
+                    pendingRefresh: false,
+                    lastStatus: null
+                };
+            }
+            const state = pollingState[jobId];
+
+            if (state.inFlight) {
+                state.pendingRefresh = true;
+                return;
+            }
+            state.inFlight = true;
+
+            try {
+                // Add cache-busting to prevent stale progress data
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+
+                const response = await fetch(`/api/job/${jobId}?_t=${Date.now()}`, {
+                    cache: 'no-store',
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    if (response.status === 404) {
+                        removeJobFromStorage(jobId);
+                        document.getElementById(`job-${jobId}`)?.remove();
+                        selectedJobs.delete(jobId);
+                        updateBatchActions();
+                        updateJobsHeader();
+                        delete pollingState[jobId];
+                        return;
+                    }
+                    // For other errors, retry with backoff
+                    state.errorCount++;
+                    const backoff = Math.min(5000, 1000 * state.errorCount);
+                    console.warn(`Job ${jobId}: HTTP ${response.status}, retry in ${backoff}ms`);
+                    setTimeout(() => pollJobStatus(jobId), backoff);
+                    return;
+                }
+
+                // Reset error count on success
+                state.errorCount = 0;
+
+                const job = await response.json();
+                const existingJob = activeJobs[jobId] || {};
+                const normalizedProgress = normalizeProgress(job.progress) || existingJob.progress;
+                job.progress = normalizedProgress || { percent: 0, message: '處理中...' };
+                activeJobs[jobId] = job;
+                ensureJobOrder(jobId);
+                scheduleJobsSave();
+                renderJobCard(jobId, job);
+
+                // Check for terminal states
+                if (job.status === 'done') {
+                    if (state.lastStatus !== 'done') {
+                        showToast('轉換完成');
+                    }
+                    updateJobsHeader();
+                    state.lastStatus = 'done';
+                    delete pollingState[jobId];
+                    return;
+                } else if (job.status === 'cancelled') {
+                    updateJobsHeader();
+                    state.lastStatus = 'cancelled';
+                    delete pollingState[jobId];
+                    return;
+                } else if (job.status === 'error') {
+                    if (state.lastStatus !== 'error') {
+                        showToast('轉換失敗: ' + (job.error || '未知錯誤'), 'error');
+                    }
+                    updateJobsHeader();
+                    state.lastStatus = 'error';
+                    delete pollingState[jobId];
+                    return;
+                }
+
+                // Still processing - check for stalls
+                const progressKey = JSON.stringify(job.progress);
+                if (progressKey === state.lastProgress) {
+                    state.staleCount++;
+                } else {
+                    state.staleCount = 0;
+                    state.lastProgress = progressKey;
+                }
+
+                // Warn if progress hasn't changed for 30+ seconds (60 polls at 500ms)
+                if (state.staleCount > 60 && state.staleCount % 60 === 0) {
+                    console.warn(`Job ${jobId}: Progress stale for ${state.staleCount * 0.5}s`);
+                }
+
+                // Continue polling - use requestAnimationFrame for better background tab handling
+                const pollDelay = document.hidden ? 2000 : 500; // Slower when tab is hidden
+                setTimeout(() => pollJobStatus(jobId), pollDelay);
+
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.warn(`Job ${jobId}: Request timeout, retrying...`);
+                } else {
+                    console.error(`Job ${jobId}: Poll error:`, error);
+                }
+                state.errorCount++;
+                const backoff = Math.min(5000, 1000 * state.errorCount);
+                setTimeout(() => pollJobStatus(jobId), backoff);
+            } finally {
+                state.inFlight = false;
+                if (state.pendingRefresh) {
+                    state.pendingRefresh = false;
+                    setTimeout(() => pollJobStatus(jobId), 0);
+                }
+            }
+        }
+
+        // Now that pollJobStatus is defined, load saved jobs from localStorage
+        loadJobsFromStorage();
+
+        // Helper function to process a single mode
+        async function processSingleMode(mode, endpoint, csrfToken) {
+            const modeNames = { pdf: 'ocr', word: 'word', markdown: 'markdown' };
+            const formData = new FormData();
+            selectedFiles.forEach(file => formData.append('files', file));
+
+            const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+            const response = await fetch(endpoint, { method: 'POST', body: formData, headers });
+            if (!response.ok) throw new Error('伺服器錯誤: ' + response.status);
+
+            const data = await response.json();
+            const jobs = data.jobs || [];
+            jobs.forEach(job => {
+                activeJobs[job.job_id] = {
+                    filename: job.filename,
+                    status: 'processing',
+                    mode: modeNames[mode],
+                    progress: { percent: 0, message: '準備中...' }
+                };
+                ensureJobOrder(job.job_id);
+                renderJobCard(job.job_id, activeJobs[job.job_id]);
+                pollJobStatus(job.job_id);
+            });
+            scheduleJobsSave();
+            return jobs.map(job => job.job_id);
+        }
+
+        async function processFiles() {
+            if (selectedFiles.length === 0 || selectedModes.size === 0) return;
+
+            const endpoints = { pdf: '/api/ocr', word: '/api/word', markdown: '/api/markdown' };
+
+            processBtn.disabled = true;
+            processBtn.classList.add('loading');
+
+            try {
+                // Check for dual VL export optimization (both Markdown AND Word selected)
+                const hasBothVL = selectedModes.has('markdown') && selectedModes.has('word');
+
+                if (hasBothVL) {
+                    // Optimized path: single VL run for both outputs
+                    const formData = new FormData();
+                    selectedFiles.forEach(file => formData.append('files', file));
+
+                    const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+                    const response = await fetch('/api/export', { method: 'POST', body: formData, headers });
+                    if (!response.ok) throw new Error('伺服器錯誤: ' + response.status);
+
+                    const data = await response.json();
+
+                    // Process job pairs - each file produces two jobs
+                    for (const pair of data.job_pairs) {
+                        for (const job of pair.jobs) {
+                            activeJobs[job.job_id] = {
+                                filename: pair.filename,
+                                status: 'processing',
+                                mode: job.mode,
+                                progress: { percent: 0, message: '準備中...' }
+                            };
+                            ensureJobOrder(job.job_id);
+                            renderJobCard(job.job_id, activeJobs[job.job_id]);
+                            pollJobStatus(job.job_id);
+                        }
+                    }
+
+                    // Also process PDF if selected (uses different pipeline)
+                    if (selectedModes.has('pdf')) {
+                        await processSingleMode('pdf', endpoints.pdf, csrfToken);
+                    }
+                } else {
+                    // Original path: separate requests per mode
+                    for (const mode of selectedModes) {
+                        await processSingleMode(mode, endpoints[mode], csrfToken);
+                    }
+                }
+
+                scheduleJobsSave();
+                updateJobsHeader();
+                selectedFiles = [];
+                renderFileList();
+                updateProcessButton();
+            } catch (error) {
+                showToast('錯誤: ' + error.message);
+            } finally {
+                processBtn.disabled = selectedFiles.length === 0 || selectedModes.size === 0;
+                processBtn.classList.remove('loading');
+            }
+        }
+
+        function downloadFile(jobId, url, filename) {
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            animateRemove(jobId);
+            selectedJobs.delete(jobId);
+            removeJobFromStorage(jobId);
+            updateBatchActions();
+            updateJobsHeader();
+        }
+
+        async function dismissJob(jobId, downloadId) {
+            animateRemove(jobId);
+            if (downloadId) {
+                const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+                try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+            }
+            selectedJobs.delete(jobId);
+            removeJobFromStorage(jobId);
+            updateBatchActions();
+            updateJobsHeader();
+        }
+
+        async function cancelJob(jobId) {
+            try {
+                const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+                const response = await fetch(`/api/cancel/${jobId}`, { method: 'POST', headers });
+                if (response.ok) {
+                    showToast('已取消處理');
+                    if (activeJobs[jobId]) {
+                        activeJobs[jobId].status = 'cancelled';
+                        renderJobCard(jobId, activeJobs[jobId]);
+                    }
+                    updateJobsHeader();
+                }
+            } catch (e) {
+                console.error('Error cancelling job:', e);
+            }
+        }
+
+        async function batchDownload() {
+            const jobIds = [...selectedJobs];
+            for (const jobId of jobIds) {
+                const job = activeJobs[jobId];
+                if (job?.status === 'done' && job?.result) {
+                    const r = job.result;
+                    const nameParam = r.original_name ? `?name=${encodeURIComponent(r.original_name)}` : '';
+                    const url = job.mode === 'ocr'
+                        ? `/api/download/${r.download_id}${nameParam}`
+                        : job.mode === 'markdown'
+                            ? `/api/download/markdown/${r.download_id}${nameParam}`
+                            : `/api/download/word/${r.download_id}${nameParam}`;
+
+                    await new Promise(r => setTimeout(r, 200));
+                    const link = document.createElement('a');
+                    link.href = url;
+                    const baseName = r.original_name ? r.original_name.replace(/\.[^/.]+$/, '') : r.download_id;
+                    link.download = job.mode === 'ocr' ? r.original_name : `${baseName}.${job.mode === 'markdown' ? 'zip' : 'docx'}`;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                }
+            }
+
+            for (const jobId of jobIds) {
+                animateRemove(jobId);
+                removeJobFromStorage(jobId);
+                selectedJobs.delete(jobId);
+            }
+            updateBatchActions();
+            showToast(`開始下載 ${jobIds.length} 個檔案`);
+        }
+
+        async function batchDismiss() {
+            const jobIds = [...selectedJobs];
+            const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+            for (const jobId of jobIds) {
+                const downloadId = activeJobs[jobId]?.result?.download_id;
+                animateRemove(jobId);
+                if (downloadId) {
+                    try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+                }
+                removeJobFromStorage(jobId);
+                selectedJobs.delete(jobId);
+            }
+            updateBatchActions();
+            showToast(`已移除 ${jobIds.length} 項`);
+        }
+
+        function clearSelection() {
+            for (const jobId of selectedJobs) {
+                const card = document.getElementById(`job-${jobId}`);
+                card?.classList.remove('selected');
+                const checkbox = card?.querySelector('.job-checkbox');
+                if (checkbox) checkbox.checked = false;
+            }
+            selectedJobs.clear();
+            updateBatchActions();
+        }
+
+        async function previewMarkdown(folderId) {
+            try {
+                const response = await fetch(`/api/view/markdown/${folderId}`);
+                if (!response.ok) throw new Error('無法載入預覽');
+                const data = await response.json();
+                document.getElementById('modalTitle').textContent = data.filename;
+                document.getElementById('markdownContent').textContent = data.content;
+                previewModal.classList.add('show');
+            } catch (error) {
+                showToast('預覽載入失敗');
+            }
+        }
+
+        function closeModal() {
+            previewModal.classList.remove('show');
+        }
+
+        previewModal.addEventListener('click', (e) => { if (e.target === previewModal) closeModal(); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+        processBtn.addEventListener('click', processFiles);
+    </script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+services:
+  pdf-ocr:
+    build: .
+    container_name: pdf-ocr
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - pdf-ocr-output:/tmp/pdf_ocr_output
+    networks:
+      - app-net
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  pdf-ocr-output:
+
+networks:
+  app-net:
+    external: true
