@@ -54,7 +54,8 @@ csrf = CSRFProtect(app)
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["100 per minute"],
+    # The SPA polls job status; keep this high enough to avoid self-inflicted 429s.
+    default_limits=["1000 per minute"],
     storage_uri="memory://"
 )
 
@@ -138,8 +139,11 @@ def cleanup_old_files():
             # Clean up old jobs from memory (older than JOB_MAX_AGE)
             try:
                 with jobs_lock:
-                    stale_jobs = [jid for jid, job in jobs.items()
-                                  if now - job.get('updated_at', job.get('created_at', 0)) > JOB_MAX_AGE]
+                    stale_jobs = [
+                        jid for jid, job in jobs.items()
+                        if job.get('status') != 'processing'
+                        and now - job.get('updated_at', job.get('created_at', 0)) > JOB_MAX_AGE
+                    ]
                     for jid in stale_jobs:
                         del jobs[jid]
                         logger.info(f"Cleanup: Removed stale job: {jid}")
@@ -359,7 +363,9 @@ def sanitize_download_name(filename: str, max_length: int = 200) -> str:
 
 def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
                         original_filename: str = None,
-                        extra_steps: int = 0) -> tuple[list, Path, int, str]:
+                        extra_steps: int = 0,
+                        mirror_task_ids: list[str] | None = None,
+                        cancel_task_ids: list[str] | None = None) -> tuple[list, Path, int, str]:
     """
     Shared VL processing logic for both Markdown and Word export.
     Returns (restructured_results, file_output_dir, total_pages, download_id).
@@ -370,6 +376,11 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
     Args:
         extra_steps: Additional steps after VL processing (e.g., 2 for Word conversion).
                      Used to calculate consistent progress percentage throughout the pipeline.
+        mirror_task_ids: Optional list of task IDs to mirror progress updates to.
+                         Useful for dual-export where one VL run feeds multiple jobs.
+        cancel_task_ids: Optional list of task IDs; VL processing is cancelled only if
+                         *all* of these IDs are cancelled. If omitted, cancellation is
+                         based on task_id only.
     """
     import fitz
 
@@ -391,16 +402,24 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
 
     # Use total_steps for consistent progress tracking throughout the pipeline
     total_steps = total_pages + extra_steps
-    update_progress(task_id, 0, total_steps, 'processing', f'開始轉換 {total_pages} 頁...')
+    task_ids = [task_id] + (mirror_task_ids or [])
+
+    def _should_cancel() -> bool:
+        if cancel_task_ids:
+            return all(is_cancelled(jid) for jid in cancel_task_ids)
+        return is_cancelled(task_id)
+
+    for tid in task_ids:
+        update_progress(tid, 0, total_steps, 'processing', f'開始轉換 {total_pages} 頁...')
 
     pipeline = get_vl_pipeline()
 
     # Create output directory for this file
     # Include task_id to prevent collisions when same filename is uploaded multiple times
     if original_filename:
-        base_name = Path(original_filename).stem
+        base_name = sanitize_download_name(Path(original_filename).stem, max_length=120)
     else:
-        base_name = Path(input_pdf_path).stem
+        base_name = sanitize_download_name(Path(input_pdf_path).stem, max_length=120)
     download_id = f"{base_name}_{task_id}"
     file_output_dir = output_dir / download_id
     file_output_dir.mkdir(parents=True, exist_ok=True)
@@ -411,11 +430,12 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         pages_res = []
         for page_num in range(total_pages):
             # Check for cancellation
-            if is_cancelled(task_id):
+            if _should_cancel():
                 raise RuntimeError("已取消處理")
 
-            update_progress(task_id, page_num + 1, total_steps, 'processing',
-                           f'辨識第 {page_num + 1}/{total_pages} 頁...')
+            for tid in task_ids:
+                update_progress(tid, page_num + 1, total_steps, 'processing',
+                               f'辨識第 {page_num + 1}/{total_pages} 頁...')
 
             # Render page to image
             # 1.5x zoom: 平衡品質與記憶體 (VL 模型會自行處理解析度)
@@ -439,7 +459,8 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         doc.close()
         doc_closed = True
 
-        update_progress(task_id, total_pages, total_steps, 'saving', '整合頁面內容...')
+        for tid in task_ids:
+            update_progress(tid, total_pages, total_steps, 'saving', '整合頁面內容...')
 
         # Restructure pages with cross-page table merging and title releveling
         restructured = pipeline.restructure_pages(
@@ -462,6 +483,26 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
 
 
 def update_progress(task_id: str, current: int, total: int, status: str, message: str = ""):
+    # Don't overwrite cancelled progress unless we are explicitly marking cancelled.
+    # (Workers can still race with a user-initiated cancel.)
+    if status != 'cancelled':
+        with progress_lock:
+            existing = progress_data.get(task_id)
+            if existing and existing.get('status') == 'cancelled':
+                return
+        if is_cancelled(task_id):
+            return
+
+    now = time.time()
+
+    # Heartbeat: keep the job from being GC'd while it's actively processing.
+    # Important: acquire jobs_lock separately from progress_lock to avoid deadlocks
+    # (cleanup thread acquires jobs_lock then progress_lock).
+    with jobs_lock:
+        job = jobs.get(task_id)
+        if job and job.get('status') == 'processing':
+            job['updated_at'] = now
+
     with progress_lock:
         progress_data[task_id] = {
             'current': current,
@@ -469,16 +510,26 @@ def update_progress(task_id: str, current: int, total: int, status: str, message
             'percent': min(100, int((current / total) * 100)) if total > 0 else 0,
             'status': status,
             'message': message,
-            'updated_at': time.time()  # Timestamp for stale detection
+            'updated_at': now  # Timestamp for stale detection
         }
 
 
 def update_job(job_id: str, **kwargs):
     """Update job status."""
     with jobs_lock:
-        if job_id in jobs:
-            jobs[job_id].update(kwargs)
-            jobs[job_id]['updated_at'] = time.time()
+        job = jobs.get(job_id)
+        if not job:
+            return
+
+        # Never overwrite a user-cancelled job with done/error.
+        # (Cancellation is an explicit user intent and should win races.)
+        current_status = job.get('status')
+        new_status = kwargs.get('status')
+        if current_status == 'cancelled' and new_status and new_status != 'cancelled':
+            return
+
+        job.update(kwargs)
+        job['updated_at'] = time.time()
 
 
 def is_cancelled(job_id: str) -> bool:
@@ -680,7 +731,6 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
                 raise RuntimeError("已取消處理")
 
             batch_end = min(batch_start + OCR_BATCH_SIZE, total_pages)
-            batch_size = batch_end - batch_start
 
             update_progress(task_id, batch_start + 1, total_pages, 'processing',
                            f'辨識第 {batch_start + 1}-{batch_end}/{total_pages} 頁...')
@@ -895,17 +945,15 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
 def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str, original_filename: str = None) -> dict:
     """Convert PDF to Markdown using PaddleOCR-VL-1.5."""
 
-    if original_filename:
-        base_name = Path(original_filename).stem
-    else:
-        base_name = Path(input_pdf_path).stem
-
     # Use shared VL processing (now returns download_id for unique folder naming)
     restructured, file_output_dir, total_pages, download_id = process_pdf_with_vl(
         input_pdf_path, output_dir, task_id, original_filename
     )
 
     try:
+        if is_cancelled(task_id):
+            raise RuntimeError("已取消處理")
+
         # Save to markdown
         for res in restructured:
             res.save_to_markdown(save_path=str(file_output_dir))
@@ -1132,7 +1180,6 @@ def html_img_to_markdown(html_content: str, output_dir: Path = None) -> str:
     from bs4 import BeautifulSoup
     import base64
     import re
-    from urllib.parse import quote
 
     soup = BeautifulSoup(html_content, 'html.parser')
     img = soup.find('img')
@@ -1250,11 +1297,6 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
     """Convert PDF to Word document using PaddleOCR-VL-1.5 + pandoc."""
     import subprocess
 
-    if original_filename:
-        base_name = Path(original_filename).stem
-    else:
-        base_name = Path(input_pdf_path).stem
-
     # Word conversion has 2 extra steps after VL processing:
     # 1. Processing tables/images
     # 2. Pandoc conversion
@@ -1269,6 +1311,9 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
     total_steps = total_pages + extra_steps
 
     try:
+        if is_cancelled(task_id):
+            raise RuntimeError("已取消處理")
+
         # Save to markdown
         for res in restructured:
             res.save_to_markdown(save_path=str(file_output_dir))
@@ -1305,7 +1350,10 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
         docx_path = file_output_dir / docx_filename
 
         try:
-            result = subprocess.run(
+            if is_cancelled(task_id):
+                raise RuntimeError("已取消處理")
+
+            subprocess.run(
                 ['pandoc', str(final_md_path), '-o', str(docx_path),
                  '--resource-path', str(file_output_dir),
                  '--extract-media', str(file_output_dir)],
@@ -1365,11 +1413,23 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
                 return
 
             file_id = str(uuid.uuid4())[:8]
-            base_name = Path(original_filename).stem
+            base_name = sanitize_download_name(Path(original_filename).stem, max_length=120)
             output_filename = f"{base_name}_searchable_{file_id}.pdf"
             output_path = OUTPUT_DIR / output_filename
 
             result = create_searchable_pdf(input_path, str(output_path), job_id)
+
+            # If cancelled after processing finished but before job completion update,
+            # respect cancellation and clean up the generated output.
+            if is_cancelled(job_id):
+                if output_path and output_path.exists():
+                    try:
+                        output_path.unlink()
+                    except Exception:
+                        pass
+                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+                update_job(job_id, status='cancelled')
+                return
 
             job_result = {
                 'total_pages': result['total_pages'],
@@ -1520,8 +1580,12 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
 
     with vl_processing_lock:
         try:
-            # Check if either job cancelled
-            if is_cancelled(md_job_id) or is_cancelled(word_job_id):
+            # Cancellation semantics for dual export:
+            # - If both jobs are cancelled: stop everything.
+            # - If only one job is cancelled: continue to produce the other output.
+            want_md = not is_cancelled(md_job_id)
+            want_word = not is_cancelled(word_job_id)
+            if not want_md and not want_word:
                 for jid in [md_job_id, word_job_id]:
                     update_progress(jid, 0, 0, 'cancelled', '已取消')
                     update_job(jid, status='cancelled')
@@ -1532,15 +1596,13 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
             # Use extra_steps=2 so Word job progress is consistent
             extra_steps = 2
             restructured, file_output_dir, total_pages, download_id = process_pdf_with_vl(
-                input_path, OUTPUT_DIR, md_job_id, original_filename, extra_steps=extra_steps
+                input_path, OUTPUT_DIR, md_job_id, original_filename,
+                extra_steps=extra_steps,
+                mirror_task_ids=[word_job_id],
+                cancel_task_ids=[md_job_id, word_job_id],
             )
 
             total_steps = total_pages + extra_steps
-
-            # Sync word job progress with markdown job
-            with progress_lock:
-                if md_job_id in progress_data:
-                    progress_data[word_job_id] = progress_data[md_job_id].copy()
 
             # Phase 2: Save Markdown
             # Markdown job uses total_pages as its total (no extra steps)
@@ -1584,15 +1646,22 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                 images.extend(file_output_dir.glob(pattern))
 
             # Markdown job done
-            update_progress(md_job_id, total_pages, total_pages, 'done', '完成!')
-            update_job(md_job_id, status='done', result={
-                'total_pages': total_pages,
-                'download_id': download_id,
-                'images_count': len(images),
-                'original_name': original_filename
-            })
+            if not is_cancelled(md_job_id):
+                update_progress(md_job_id, total_pages, total_pages, 'done', '完成!')
+                update_job(md_job_id, status='done', result={
+                    'total_pages': total_pages,
+                    'download_id': download_id,
+                    'images_count': len(images),
+                    'original_name': original_filename
+                })
 
             # Phase 3: Convert to Word
+            if is_cancelled(word_job_id):
+                # Word was cancelled; do not waste time on conversion.
+                update_progress(word_job_id, 0, 0, 'cancelled', '已取消')
+                update_job(word_job_id, status='cancelled')
+                return
+
             update_progress(word_job_id, total_pages + 1, total_steps, 'converting', '轉換為 Word...')
 
             # Process markdown for Word (HTML tables -> MD tables)
@@ -1630,13 +1699,14 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                 word_md_path.unlink()
 
             # Word job done
-            update_progress(word_job_id, total_steps, total_steps, 'done', '完成!')
-            update_job(word_job_id, status='done', result={
-                'total_pages': total_pages,
-                'download_id': download_id,
-                'images_count': len(images),
-                'original_name': original_filename
-            })
+            if not is_cancelled(word_job_id):
+                update_progress(word_job_id, total_steps, total_steps, 'done', '完成!')
+                update_job(word_job_id, status='done', result={
+                    'total_pages': total_pages,
+                    'download_id': download_id,
+                    'images_count': len(images),
+                    'original_name': original_filename
+                })
 
         except Exception as e:
             import traceback
@@ -1700,6 +1770,7 @@ def get_progress(task_id):
 
 
 @app.route('/api/job/<job_id>')
+@limiter.limit("2000 per minute")
 def get_job_status(job_id):
     """Get job status and result."""
     with jobs_lock:
@@ -1739,14 +1810,18 @@ def ocr_endpoint():
 
     files = request.files.getlist('files')
     job_ids = []
+    skipped = []
 
     for file in files:
-        if not file.filename.lower().endswith('.pdf'):
+        filename = file.filename or ''
+        if not filename.lower().endswith('.pdf'):
+            skipped.append({'filename': filename, 'reason': 'not_pdf'})
             continue
 
         # Validate PDF magic bytes
         if not validate_pdf_file(file):
-            return jsonify({'error': f'File {file.filename} is not a valid PDF'}), 400
+            skipped.append({'filename': filename, 'reason': 'invalid_pdf'})
+            continue
 
         # Generate job ID
         job_id = str(uuid.uuid4())[:8]
@@ -1779,9 +1854,9 @@ def ocr_endpoint():
         })
 
     if not job_ids:
-        return jsonify({'error': 'No valid PDF files provided'}), 400
+        return jsonify({'error': 'No valid PDF files provided', 'skipped': skipped}), 400
 
-    return jsonify({'jobs': job_ids})
+    return jsonify({'jobs': job_ids, 'skipped': skipped})
 
 
 @app.route('/api/markdown', methods=['POST'])
@@ -1793,14 +1868,18 @@ def markdown_endpoint():
 
     files = request.files.getlist('files')
     job_ids = []
+    skipped = []
 
     for file in files:
-        if not file.filename.lower().endswith('.pdf'):
+        filename = file.filename or ''
+        if not filename.lower().endswith('.pdf'):
+            skipped.append({'filename': filename, 'reason': 'not_pdf'})
             continue
 
         # Validate PDF magic bytes
         if not validate_pdf_file(file):
-            return jsonify({'error': f'File {file.filename} is not a valid PDF'}), 400
+            skipped.append({'filename': filename, 'reason': 'invalid_pdf'})
+            continue
 
         job_id = str(uuid.uuid4())[:8]
         upload_path = UPLOAD_DIR / f"{job_id}.pdf"
@@ -1828,9 +1907,9 @@ def markdown_endpoint():
         })
 
     if not job_ids:
-        return jsonify({'error': 'No valid PDF files provided'}), 400
+        return jsonify({'error': 'No valid PDF files provided', 'skipped': skipped}), 400
 
-    return jsonify({'jobs': job_ids})
+    return jsonify({'jobs': job_ids, 'skipped': skipped})
 
 
 @app.route('/api/word', methods=['POST'])
@@ -1842,14 +1921,18 @@ def word_endpoint():
 
     files = request.files.getlist('files')
     job_ids = []
+    skipped = []
 
     for file in files:
-        if not file.filename.lower().endswith('.pdf'):
+        filename = file.filename or ''
+        if not filename.lower().endswith('.pdf'):
+            skipped.append({'filename': filename, 'reason': 'not_pdf'})
             continue
 
         # Validate PDF magic bytes
         if not validate_pdf_file(file):
-            return jsonify({'error': f'File {file.filename} is not a valid PDF'}), 400
+            skipped.append({'filename': filename, 'reason': 'invalid_pdf'})
+            continue
 
         job_id = str(uuid.uuid4())[:8]
         upload_path = UPLOAD_DIR / f"{job_id}.pdf"
@@ -1877,9 +1960,9 @@ def word_endpoint():
         })
 
     if not job_ids:
-        return jsonify({'error': 'No valid PDF files provided'}), 400
+        return jsonify({'error': 'No valid PDF files provided', 'skipped': skipped}), 400
 
-    return jsonify({'jobs': job_ids})
+    return jsonify({'jobs': job_ids, 'skipped': skipped})
 
 
 @app.route('/api/export', methods=['POST'])
@@ -1891,13 +1974,17 @@ def export_endpoint():
 
     files = request.files.getlist('files')
     job_pairs = []
+    skipped = []
 
     for file in files:
-        if not file.filename.lower().endswith('.pdf'):
+        filename = file.filename or ''
+        if not filename.lower().endswith('.pdf'):
+            skipped.append({'filename': filename, 'reason': 'not_pdf'})
             continue
 
         if not validate_pdf_file(file):
-            return jsonify({'error': f'File {file.filename} is not a valid PDF'}), 400
+            skipped.append({'filename': filename, 'reason': 'invalid_pdf'})
+            continue
 
         # Create two job IDs for same file
         md_job_id = str(uuid.uuid4())[:8]
@@ -1939,9 +2026,9 @@ def export_endpoint():
         })
 
     if not job_pairs:
-        return jsonify({'error': 'No valid PDF files provided'}), 400
+        return jsonify({'error': 'No valid PDF files provided', 'skipped': skipped}), 400
 
-    return jsonify({'job_pairs': job_pairs})
+    return jsonify({'job_pairs': job_pairs, 'skipped': skipped})
 
 
 @app.route('/api/download/word/<folder_name>')

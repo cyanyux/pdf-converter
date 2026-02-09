@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+
+# Local artifacts / docs
+*.pdf
+PLAN-*.md
+cookies.txt
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db

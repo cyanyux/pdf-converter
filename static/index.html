@@ -1130,6 +1130,16 @@
             return div.innerHTML;
         }
 
+        // Escape for HTML attributes (e.g. data-*) in generated markup.
+        function escapeAttr(value) {
+            return String(value)
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
         // SVG Icons
         const icons = {
             file: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`,
@@ -1314,7 +1324,8 @@
 
         function handleFiles(files) {
             for (const file of files) {
-                if (file.type === 'application/pdf') {
+                const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+                if (isPdf) {
                     // Use name+size+lastModified to detect true duplicates
                     // This allows same-named files from different directories
                     const isDuplicate = selectedFiles.some(f => getFileKey(f) === getFileKey(file));
@@ -1398,10 +1409,10 @@
                     const result = job.result;
                     const nameParam = result.original_name ? `?name=${encodeURIComponent(result.original_name)}` : '';
                     let url = job.mode === 'ocr'
-                        ? `/api/download/${result.download_id}${nameParam}`
+                        ? `/api/download/${encodeURIComponent(result.download_id)}${nameParam}`
                         : job.mode === 'markdown'
-                            ? `/api/download/markdown/${result.download_id}${nameParam}`
-                            : `/api/download/word/${result.download_id}${nameParam}`;
+                            ? `/api/download/markdown/${encodeURIComponent(result.download_id)}${nameParam}`
+                            : `/api/download/word/${encodeURIComponent(result.download_id)}${nameParam}`;
 
                     await new Promise(r => setTimeout(r, 200));
                     const link = document.createElement('a');
@@ -1433,7 +1444,7 @@
                 const downloadId = activeJobs[jobId]?.result?.download_id;
                 animateRemove(jobId);
                 if (downloadId) {
-                    try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+                    try { await fetch(`/api/delete/${encodeURIComponent(downloadId)}`, { method: 'DELETE', headers }); } catch (e) {}
                 }
                 removeJobFromStorage(jobId);
                 selectedJobs.delete(jobId);
@@ -1453,21 +1464,24 @@
             }
         }
 
-        function toggleJobSelection(jobId, event) {
-            if (event) event.stopPropagation();
+        function setJobSelection(jobId, selected) {
             const card = document.getElementById(`job-${jobId}`);
             const checkbox = card?.querySelector('.job-checkbox');
 
-            if (selectedJobs.has(jobId)) {
-                selectedJobs.delete(jobId);
-                card?.classList.remove('selected');
-                if (checkbox) checkbox.checked = false;
-            } else {
+            if (selected) {
                 selectedJobs.add(jobId);
                 card?.classList.add('selected');
                 if (checkbox) checkbox.checked = true;
+            } else {
+                selectedJobs.delete(jobId);
+                card?.classList.remove('selected');
+                if (checkbox) checkbox.checked = false;
             }
             updateBatchActions();
+        }
+
+        function toggleJobSelection(jobId) {
+            setJobSelection(jobId, !selectedJobs.has(jobId));
         }
 
         function getStatusText(status, progress) {
@@ -1538,13 +1552,13 @@
             if (job.status === 'processing') {
                 const progress = job.progress || {};
                 progressHtml = `
-                    <div class="job-progress">
-                        <div class="progress-bar">
-                            <div class="progress-fill" style="width: ${progress.percent || 0}%"></div>
-                        </div>
-                        <div class="progress-text">${formatProgressText(job)}</div>
-                    </div>
-                    <button class="btn-cancel" onclick="cancelJob('${jobId}')">
+	                    <div class="job-progress">
+	                        <div class="progress-bar">
+	                            <div class="progress-fill" style="width: ${progress.percent || 0}%"></div>
+	                        </div>
+	                        <div class="progress-text">${escapeHtml(formatProgressText(job))}</div>
+	                    </div>
+                    <button class="btn-cancel" data-action="cancel" data-job-id="${escapeAttr(jobId)}">
                         ${icons.stop} 取消
                     </button>
                 `;
@@ -1556,10 +1570,10 @@
                 const mode = job.mode;
                 const nameParam = r.original_name ? `?name=${encodeURIComponent(r.original_name)}` : '';
                 const downloadUrl = mode === 'ocr'
-                    ? `/api/download/${r.download_id}${nameParam}`
+                    ? `/api/download/${encodeURIComponent(r.download_id)}${nameParam}`
                     : mode === 'markdown'
-                        ? `/api/download/markdown/${r.download_id}${nameParam}`
-                        : `/api/download/word/${r.download_id}${nameParam}`;
+                        ? `/api/download/markdown/${encodeURIComponent(r.download_id)}${nameParam}`
+                        : `/api/download/word/${encodeURIComponent(r.download_id)}${nameParam}`;
                 const baseName = r.original_name ? r.original_name.replace(/\.[^/.]+$/, '') : r.download_id;
                 const filename = mode === 'ocr' ? r.original_name : `${baseName}.${mode === 'markdown' ? 'zip' : 'docx'}`;
                 const pageInfo = r.total_pages + ' 頁' + (r.images_count > 0 ? `，${r.images_count} 張圖片` : '');
@@ -1573,11 +1587,17 @@
                         </div>
                     </div>
                     <div class="job-buttons">
-                        <button class="btn-download ${formatClasses[mode]}" onclick="downloadFile('${jobId}', '${downloadUrl}', '${filename}')">
+                        <button
+                            class="btn-download ${formatClasses[mode]}"
+                            data-action="download"
+                            data-job-id="${escapeAttr(jobId)}"
+                            data-url="${escapeAttr(downloadUrl)}"
+                            data-filename="${escapeAttr(filename)}"
+                        >
                             ${icons.download} 下載
                         </button>
-                        ${mode === 'markdown' ? `<button class="btn-secondary" onclick="previewMarkdown('${r.download_id}')">${icons.eye} 預覽</button>` : ''}
-                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', '${r.download_id}')">
+                        ${mode === 'markdown' ? `<button class="btn-secondary" data-action="preview" data-folder-id="${escapeAttr(r.download_id)}">${icons.eye} 預覽</button>` : ''}
+                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="${escapeAttr(r.download_id)}">
                             ${icons.trash} 移除
                         </button>
                     </div>
@@ -1586,9 +1606,9 @@
 
             if (job.status === 'error') {
                 resultHtml = `
-                    <div class="error-message">${job.error || '處理時發生錯誤'}</div>
+                    <div class="error-message">${escapeHtml(job.error || '處理時發生錯誤')}</div>
                     <div class="job-buttons">
-                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', null)">${icons.trash} 移除</button>
+                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} 移除</button>
                     </div>
                 `;
             }
@@ -1596,13 +1616,13 @@
             if (job.status === 'cancelled') {
                 resultHtml = `
                     <div class="job-buttons">
-                        <button class="btn-dismiss" onclick="dismissJob('${jobId}', null)">${icons.trash} 移除</button>
+                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} 移除</button>
                     </div>
                 `;
             }
 
             const checkboxHtml = job.status === 'done'
-                ? `<input type="checkbox" class="job-checkbox" ${wasSelected ? 'checked' : ''} onclick="toggleJobSelection('${jobId}', event)">`
+                ? `<input type="checkbox" class="job-checkbox" data-job-id="${escapeAttr(jobId)}" ${wasSelected ? 'checked' : ''}>`
                 : '';
 
             const cardHtml = `
@@ -1626,6 +1646,32 @@
                 jobsContainer.insertAdjacentHTML('beforeend', cardHtml);
             }
         }
+
+        // Job card actions are bound via event delegation to avoid injecting untrusted data into inline JS.
+        jobsContainer.addEventListener('click', (e) => {
+            const btn = e.target.closest('button[data-action]');
+            if (!btn) return;
+
+            const action = btn.dataset.action;
+            if (action === 'download') {
+                downloadFile(btn.dataset.jobId, btn.dataset.url, btn.dataset.filename);
+            } else if (action === 'preview') {
+                previewMarkdown(btn.dataset.folderId);
+            } else if (action === 'dismiss') {
+                const downloadId = btn.dataset.downloadId || null;
+                dismissJob(btn.dataset.jobId, downloadId);
+            } else if (action === 'cancel') {
+                cancelJob(btn.dataset.jobId);
+            }
+        });
+
+        jobsContainer.addEventListener('change', (e) => {
+            const cb = e.target;
+            if (!cb || !cb.classList || !cb.classList.contains('job-checkbox')) return;
+            const jobId = cb.dataset.jobId;
+            if (!jobId) return;
+            setJobSelection(jobId, cb.checked);
+        });
 
         // Track polling state to detect stalls
         const pollingState = {};
@@ -1731,7 +1777,7 @@
                 }
 
                 // Continue polling - use requestAnimationFrame for better background tab handling
-                const pollDelay = document.hidden ? 2000 : 500; // Slower when tab is hidden
+                const pollDelay = document.hidden ? 3000 : 1000; // Slower when tab is hidden
                 setTimeout(() => pollJobStatus(jobId), pollDelay);
 
             } catch (error) {
@@ -1863,7 +1909,7 @@
             animateRemove(jobId);
             if (downloadId) {
                 const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
-                try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+                try { await fetch(`/api/delete/${encodeURIComponent(downloadId)}`, { method: 'DELETE', headers }); } catch (e) {}
             }
             selectedJobs.delete(jobId);
             removeJobFromStorage(jobId);
@@ -1896,10 +1942,10 @@
                     const r = job.result;
                     const nameParam = r.original_name ? `?name=${encodeURIComponent(r.original_name)}` : '';
                     const url = job.mode === 'ocr'
-                        ? `/api/download/${r.download_id}${nameParam}`
+                        ? `/api/download/${encodeURIComponent(r.download_id)}${nameParam}`
                         : job.mode === 'markdown'
-                            ? `/api/download/markdown/${r.download_id}${nameParam}`
-                            : `/api/download/word/${r.download_id}${nameParam}`;
+                            ? `/api/download/markdown/${encodeURIComponent(r.download_id)}${nameParam}`
+                            : `/api/download/word/${encodeURIComponent(r.download_id)}${nameParam}`;
 
                     await new Promise(r => setTimeout(r, 200));
                     const link = document.createElement('a');
@@ -1928,7 +1974,7 @@
                 const downloadId = activeJobs[jobId]?.result?.download_id;
                 animateRemove(jobId);
                 if (downloadId) {
-                    try { await fetch(`/api/delete/${downloadId}`, { method: 'DELETE', headers }); } catch (e) {}
+                    try { await fetch(`/api/delete/${encodeURIComponent(downloadId)}`, { method: 'DELETE', headers }); } catch (e) {}
                 }
                 removeJobFromStorage(jobId);
                 selectedJobs.delete(jobId);
@@ -1950,7 +1996,7 @@
 
         async function previewMarkdown(folderId) {
             try {
-                const response = await fetch(`/api/view/markdown/${folderId}`);
+                const response = await fetch(`/api/view/markdown/${encodeURIComponent(folderId)}`);
                 if (!response.ok) throw new Error('無法載入預覽');
                 const data = await response.json();
                 document.getElementById('modalTitle').textContent = data.filename;
