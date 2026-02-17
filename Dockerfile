@@ -33,11 +33,12 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy application code
-COPY app.py .
-COPY s2t_dict.py .
-COPY static/ static/
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+COPY app.py /app/app.py
+COPY s2t_dict.py /app/s2t_dict.py
+COPY static/ /app/static/
+COPY entrypoint.sh /app/entrypoint.sh
+# Normalize line endings and ensure executable bit for cross-platform checkouts
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # Create output directory
 RUN mkdir -p /tmp/pdf_ocr_output
@@ -50,4 +51,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:5000/api/health || exit 1
 
 # Use entrypoint to install HPI at runtime (requires GPU)
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]

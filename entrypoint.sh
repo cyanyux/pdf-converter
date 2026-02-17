@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 set -e
 
 # Allow pip to install system-wide packages (required for Ubuntu 24.04)
