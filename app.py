@@ -11,7 +11,11 @@ logger = logging.getLogger(__name__)
 
 # Skip model source connectivity check and set GPU device
 os.environ['DISABLE_MODEL_SOURCE_CHECK'] = 'True'
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK'] = 'True'
+
+configured_visible_devices = os.environ.get('PDF_OCR_CUDA_VISIBLE_DEVICES')
+if configured_visible_devices is not None and 'CUDA_VISIBLE_DEVICES' not in os.environ:
+    os.environ['CUDA_VISIBLE_DEVICES'] = configured_visible_devices
 
 import tempfile
 import uuid
@@ -30,7 +34,42 @@ import numpy as np
 
 # Set Paddle device early
 import paddle
-paddle.set_device('gpu:0')
+
+
+def _parse_bool_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _initialize_runtime_device() -> tuple[str, bool]:
+    """Pick a Paddle runtime device for a GPU-first deployment."""
+    requested_device = os.environ.get('PDF_OCR_DEVICE', 'auto').strip().lower()
+
+    if requested_device == 'cpu':
+        paddle.set_device('cpu')
+        logger.info("Runtime: Using Paddle device cpu (requested)")
+        return 'cpu', False
+
+    if not paddle.is_compiled_with_cuda():
+        raise RuntimeError("Paddle was built without CUDA support")
+
+    target_device = 'gpu:0' if requested_device in ('', 'auto', 'gpu', 'cuda') else requested_device
+
+    try:
+        paddle.set_device(target_device)
+        logger.info(f"Runtime: Using Paddle device {target_device}")
+        return target_device, target_device.startswith('gpu')
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to initialize Paddle device {target_device}: {exc}"
+        )
+
+
+PADDLE_DEVICE, GPU_ENABLED = _initialize_runtime_device()
+ENABLE_HPI = GPU_ENABLED and not _parse_bool_env('PDF_OCR_DISABLE_HPI', default=False)
+ALLOW_GPU_PARALLELISM = _parse_bool_env('PDF_OCR_ALLOW_GPU_PARALLELISM', default=False)
 
 # Configuration constants (can be overridden via environment)
 MAX_UPLOAD_SIZE = int(os.environ.get('PDF_OCR_MAX_UPLOAD_MB', 500)) * 1024 * 1024
@@ -79,10 +118,18 @@ progress_lock = threading.Lock()
 cancel_flags = {}
 cancel_lock = threading.Lock()
 
-# Processing locks - separate locks for OCR vs VL pipelines to allow some parallelism
-# Note: PaddlePaddle models are not thread-safe, but OCR and VL use different models
-ocr_processing_lock = threading.Lock()  # For searchable PDF (OCR pipeline)
-vl_processing_lock = threading.Lock()   # For Markdown/Word (VL pipeline)
+# Processing locks
+# Paddle models are not thread-safe, and concurrent OCR/VL GPU workloads can
+# exhaust or temporarily block a single GPU. Default to a shared lock when GPU
+# is enabled unless the operator explicitly opts into parallel GPU execution.
+if GPU_ENABLED and not ALLOW_GPU_PARALLELISM:
+    shared_gpu_lock = threading.Lock()
+    ocr_processing_lock = shared_gpu_lock
+    vl_processing_lock = shared_gpu_lock
+    logger.info("Runtime: Serializing OCR and VL jobs on the GPU")
+else:
+    ocr_processing_lock = threading.Lock()
+    vl_processing_lock = threading.Lock()
 
 # Cleanup state
 cleanup_thread = None
@@ -214,7 +261,7 @@ def get_ocr():
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
                 use_textline_orientation=False,
-                enable_hpi=True,  # ONNX Runtime GPU acceleration
+                enable_hpi=ENABLE_HPI,
                 # PP-OCRv5 server models (5-10% better accuracy)
                 text_detection_model_name="PP-OCRv5_server_det",
                 text_recognition_model_name="PP-OCRv5_server_rec",
@@ -2255,7 +2302,14 @@ def cancel_job(job_id):
 
 @app.route('/api/health')
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({
+        'status': 'ok',
+        'device': PADDLE_DEVICE,
+        'gpu_enabled': GPU_ENABLED,
+        'hpi_enabled': ENABLE_HPI,
+        'allow_gpu_parallelism': ALLOW_GPU_PARALLELISM,
+        'compiled_with_cuda': paddle.is_compiled_with_cuda(),
+    })
 
 
 @app.route('/api/csrf-token')

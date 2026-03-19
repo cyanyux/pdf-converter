@@ -34,6 +34,10 @@ Environment variables (all optional):
 - `PDF_OCR_MAX_FILE_AGE` (default `3600`)
 - `PDF_OCR_MODEL_IDLE_TIMEOUT` (default `1800`)
 - `PDF_OCR_JOB_MAX_AGE` (default `7200`)
+- `PDF_OCR_DEVICE` (default `auto`; use `cpu` only if you explicitly want a non-GPU override)
+- `PDF_OCR_CUDA_VISIBLE_DEVICES` (optional GPU selection override)
+- `PDF_OCR_DISABLE_HPI` (default `false`; set `true` to disable HPI/ONNX GPU path)
+- `PDF_OCR_ALLOW_GPU_PARALLELISM` (default `false`; set `true` only if one GPU can safely run OCR and VL together)
 - `SECRET_KEY` (default: generated at startup)
 
 Outputs are written under `/tmp/pdf_ocr_output` inside the container (mounted as the `pdf-ocr-output` volume by `docker-compose.yml`).
@@ -54,6 +58,20 @@ Outputs are written under `/tmp/pdf_ocr_output` inside the container (mounted as
 
 - Recommended workflow is Docker. `entrypoint.sh` installs the HPI plugin on first run, then starts `gunicorn`.
 - Local sanity check (no GPU required): `python3 -m py_compile app.py`
+
+## Troubleshooting GPU
+
+- Check the app health endpoint: `curl http://localhost:5000/api/health`
+- Verify GPU access inside the container: `docker exec pdf-ocr nvidia-smi`
+- If the host GPU works but the container does not, recreate the service after confirming the NVIDIA Container Toolkit/runtime is healthy:
+
+```bash
+docker compose down
+docker compose up -d --build
+```
+
+- If you recently had an NVIDIA driver auto-update, also restart Docker after the update so new containers pick up the refreshed runtime cleanly.
+- If GPU remains unavailable, fix the host/container NVIDIA runtime before restarting the service. Use `PDF_OCR_DEVICE=cpu` only if you intentionally want a non-GPU override.
 
 ## Security Notes
 

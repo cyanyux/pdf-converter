@@ -2,11 +2,15 @@ services:
   pdf-ocr:
     build: .
     container_name: pdf-ocr
+    runtime: nvidia
     restart: unless-stopped
     ports:
       - "5000:5000"
     volumes:
       - pdf-ocr-output:/tmp/pdf_ocr_output
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     networks:
       - app-net
     deploy:
