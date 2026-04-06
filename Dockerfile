@@ -34,7 +34,6 @@ RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy application code
 COPY app.py /app/app.py
-COPY i18n.py /app/i18n.py
 COPY s2t_dict.py /app/s2t_dict.py
 COPY static/ /app/static/
 COPY entrypoint.sh /app/entrypoint.sh
