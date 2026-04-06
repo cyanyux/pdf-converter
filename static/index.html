@@ -121,23 +121,6 @@
             color: var(--ink-light);
         }
 
-        .lang-switcher .text-locale-row {
-            margin-top: 4px;
-            display: none;
-            align-items: center;
-            gap: 4px;
-        }
-
-        .lang-switcher .text-locale-row.show {
-            display: flex;
-        }
-
-        .lang-switcher .text-locale-label {
-            font-size: 0.7rem;
-            color: var(--ink-muted);
-            white-space: nowrap;
-        }
-
         /* Drop Zone */
         .drop-zone {
             background: white;
@@ -1033,13 +1016,6 @@
                 <option value="zh-CN">简体中文</option>
                 <option value="en">English</option>
             </select>
-            <div class="text-locale-row" id="textLocaleRow">
-                <span class="text-locale-label">Chinese:</span>
-                <select id="textLocaleSelect">
-                    <option value="zh-TW">Traditional</option>
-                    <option value="zh-CN">Simplified</option>
-                </select>
-            </div>
         </div>
         <header class="header">
             <h1 data-i18n="title">文件識別</h1>
@@ -1153,7 +1129,6 @@
     <script>
         // ============== i18n ==============
         const I18N_STORAGE_KEY = 'pdfOcrLocale';
-        const TEXT_LOCALE_STORAGE_KEY = 'pdfOcrTextLocale';
         const translations = {
             'zh-TW': {
                 title: '文件識別',
@@ -1307,7 +1282,6 @@
         };
 
         let currentLocale = 'zh-TW';
-        let currentTextLocale = 'zh-TW';
 
         function detectLocale() {
             const saved = localStorage.getItem(I18N_STORAGE_KEY);
@@ -1316,11 +1290,6 @@
             if (lang.startsWith('en')) return 'en';
             if (lang.includes('hans') || lang === 'zh-cn' || lang === 'zh-sg') return 'zh-CN';
             return 'zh-TW';
-        }
-
-        function getTextLocale() {
-            if (currentLocale !== 'en') return currentLocale;
-            return localStorage.getItem(TEXT_LOCALE_STORAGE_KEY) || 'zh-TW';
         }
 
         function t(key, params) {
@@ -1342,17 +1311,10 @@
             document.documentElement.lang = currentLocale === 'en' ? 'en' : currentLocale;
         }
 
-        function updateTextLocaleUI() {
-            const row = document.getElementById('textLocaleRow');
-            if (row) row.classList.toggle('show', currentLocale === 'en');
-            currentTextLocale = getTextLocale();
-        }
-
         function setLocale(locale) {
             if (!translations[locale]) return;
             currentLocale = locale;
             localStorage.setItem(I18N_STORAGE_KEY, locale);
-            updateTextLocaleUI();
             applyI18n();
             // Re-render dynamic content
             updateJobsHeader();
@@ -1362,7 +1324,6 @@
 
         // Initialize locale
         currentLocale = detectLocale();
-        currentTextLocale = getTextLocale();
 
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
@@ -1383,15 +1344,6 @@
         const langSelect = document.getElementById('langSelect');
         langSelect.value = currentLocale;
         langSelect.addEventListener('change', () => setLocale(langSelect.value));
-
-        // Text locale selector (visible only when UI is English)
-        const textLocaleSelect = document.getElementById('textLocaleSelect');
-        textLocaleSelect.value = currentTextLocale;
-        textLocaleSelect.addEventListener('change', () => {
-            currentTextLocale = textLocaleSelect.value;
-            localStorage.setItem(TEXT_LOCALE_STORAGE_KEY, currentTextLocale);
-        });
-        updateTextLocaleUI();
         applyI18n();
 
         const JOB_STORAGE_KEY = 'pdfOcrJobs';
@@ -1964,10 +1916,6 @@
             setJobSelection(jobId, cb.checked);
         });
 
-        const JOB_POLL_DELAY_ACTIVE_MS = 2000;
-        const JOB_POLL_DELAY_HIDDEN_MS = 5000;
-        const JOB_STALE_WARN_INTERVAL_MS = 30000;
-
         // Track polling state to detect stalls
         const pollingState = {};
 
@@ -1977,8 +1925,6 @@
                 pollingState[jobId] = {
                     lastProgress: null,
                     staleCount: 0,
-                    lastProgressAt: Date.now(),
-                    lastStaleWarnAt: 0,
                     errorCount: 0,
                     startTime: Date.now(),
                     inFlight: false,
@@ -2066,19 +2012,15 @@
                 } else {
                     state.staleCount = 0;
                     state.lastProgress = progressKey;
-                    state.lastProgressAt = Date.now();
-                    state.lastStaleWarnAt = 0;
                 }
 
-                const staleForMs = Date.now() - state.lastProgressAt;
-                if (staleForMs >= JOB_STALE_WARN_INTERVAL_MS
-                    && staleForMs - state.lastStaleWarnAt >= JOB_STALE_WARN_INTERVAL_MS) {
-                    state.lastStaleWarnAt = staleForMs;
-                    console.warn(`Job ${jobId}: Progress stale for ${(staleForMs / 1000).toFixed(1)}s`);
+                // Warn if progress hasn't changed for 30+ seconds (60 polls at 500ms)
+                if (state.staleCount > 60 && state.staleCount % 60 === 0) {
+                    console.warn(`Job ${jobId}: Progress stale for ${state.staleCount * 0.5}s`);
                 }
 
-                // Continue polling more slowly to reduce background load.
-                const pollDelay = document.hidden ? JOB_POLL_DELAY_HIDDEN_MS : JOB_POLL_DELAY_ACTIVE_MS;
+                // Continue polling - use requestAnimationFrame for better background tab handling
+                const pollDelay = document.hidden ? 3000 : 1000; // Slower when tab is hidden
                 setTimeout(() => pollJobStatus(jobId), pollDelay);
 
             } catch (error) {
@@ -2108,7 +2050,7 @@
             const formData = new FormData();
             selectedFiles.forEach(file => formData.append('files', file));
 
-            const headers = { 'X-Locale': currentLocale, 'X-Text-Locale': currentTextLocale }; if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+            const headers = csrfToken ? { 'X-CSRFToken': csrfToken, 'X-Locale': currentLocale } : { 'X-Locale': currentLocale };
             const response = await fetch(endpoint, { method: 'POST', body: formData, headers });
             if (!response.ok) throw new Error(t('server_error', { status: response.status }));
 
@@ -2146,7 +2088,7 @@
                     const formData = new FormData();
                     selectedFiles.forEach(file => formData.append('files', file));
 
-                    const headers = { 'X-Locale': currentLocale, 'X-Text-Locale': currentTextLocale }; if (csrfToken) headers['X-CSRFToken'] = csrfToken;
+                    const headers = csrfToken ? { 'X-CSRFToken': csrfToken, 'X-Locale': currentLocale } : { 'X-Locale': currentLocale };
                     const response = await fetch('/api/export', { method: 'POST', body: formData, headers });
                     if (!response.ok) throw new Error(t('server_error', { status: response.status }));
 

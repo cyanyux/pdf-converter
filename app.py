@@ -43,16 +43,6 @@ def _parse_bool_env(name: str, default: bool = False) -> bool:
     return value.strip().lower() in ('1', 'true', 'yes', 'on')
 
 
-def _parse_float_env(name: str) -> float | None:
-    value = os.environ.get(name)
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
-
-
 def _initialize_runtime_device() -> tuple[str, bool]:
     """Pick a Paddle runtime device for a GPU-first deployment."""
     requested_device = os.environ.get('PDF_OCR_DEVICE', 'auto').strip().lower()
@@ -115,7 +105,6 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 # Upload directory for async processing
 UPLOAD_DIR = Path(tempfile.gettempdir()) / 'pdf_ocr_uploads'
 UPLOAD_DIR.mkdir(exist_ok=True)
-HPI_MARKER_PATH = Path(os.environ.get('PDF_OCR_HPI_MARKER', '/root/.paddlex/hpi_installed'))
 
 # Job tracking
 jobs = {}
@@ -187,16 +176,6 @@ def cleanup_old_files():
                         logger.info(f"Cleanup: Deleted old zip: {f.name}")
                     except Exception as e:
                         logger.info(f"Cleanup: Error deleting {f.name}: {e}")
-
-            # Clean up stale uploaded PDFs left behind by interrupted jobs.
-            upload_max_age = max(MAX_FILE_AGE, JOB_MAX_AGE)
-            for f in UPLOAD_DIR.glob('*.pdf'):
-                if f.is_file() and (now - f.stat().st_mtime) > upload_max_age:
-                    try:
-                        f.unlink()
-                        logger.info(f"Cleanup: Deleted stale upload: {f.name}")
-                    except Exception as e:
-                        logger.info(f"Cleanup: Error deleting stale upload {f.name}: {e}")
 
             # Release idle models from VRAM (check every cleanup cycle)
             try:
@@ -760,8 +739,7 @@ def ocr_batch_images(images: list, min_confidence: float = 0.5, locale: str | No
 
 def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: str,
                           dpi: int = 200, min_confidence: float = 0.5,
-                          locale: str | None = None,
-                          text_locale: str | None = None) -> dict:
+                          locale: str | None = None) -> dict:
     """Create a searchable PDF by adding invisible text layer to original PDF.
 
     Uses batch OCR processing for 30-50% faster multi-page documents.
@@ -869,10 +847,10 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
 
             # Phase 2: Run batch OCR on all images
             try:
-                batch_ocr_results = ocr_batch_images(batch_images, min_confidence=min_confidence, locale=text_locale or locale)
+                batch_ocr_results = ocr_batch_images(batch_images, min_confidence=min_confidence, locale=locale)
             except Exception as e:
                 logger.warning(f"OCR: Batch OCR failed, falling back to individual: {e}")
-                batch_ocr_results = [ocr_image(img, min_confidence, text_locale or locale) for img in batch_images]
+                batch_ocr_results = [ocr_image(img, min_confidence, locale) for img in batch_images]
             finally:
                 # Free batch images memory (always reached even if fallback fails)
                 del batch_images
@@ -1035,8 +1013,7 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
 
 
 def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
-                            original_filename: str = None, locale: str | None = None,
-                            text_locale: str | None = None) -> dict:
+                            original_filename: str = None, locale: str | None = None) -> dict:
     """Convert PDF to Markdown using PaddleOCR-VL-1.5."""
 
     # Use shared VL processing (now returns download_id for unique folder naming)
@@ -1065,7 +1042,7 @@ def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
         markdown_text = "\n\n".join(markdown_parts)
 
         # Fix simplified Chinese characters (only for zh-TW)
-        markdown_text = fix_ocr_text(markdown_text, text_locale or locale)
+        markdown_text = fix_ocr_text(markdown_text, locale)
 
         # Remove generic "Image" alt text from VL model HTML output (provides no useful info)
         markdown_text = _re.sub(r'alt="Image"', 'alt=""', markdown_text, flags=_re.IGNORECASE)
@@ -1389,8 +1366,7 @@ def process_markdown_for_word(markdown_text: str, output_dir: Path = None, local
 
 
 def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str,
-                        original_filename: str = None, locale: str | None = None,
-                        text_locale: str | None = None) -> dict:
+                        original_filename: str = None, locale: str | None = None) -> dict:
     """Convert PDF to Word document using PaddleOCR-VL-1.5 + pandoc."""
     import subprocess
 
@@ -1429,7 +1405,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str,
 
         # Process HTML elements in markdown
         update_progress(task_id, total_pages + 1, total_steps, 'processing', _msg('processing_tables', locale))
-        markdown_text = process_markdown_for_word(markdown_text, file_output_dir, text_locale or locale)
+        markdown_text = process_markdown_for_word(markdown_text, file_output_dir, locale)
 
         # Save processed markdown with correct name (use download_id for consistency)
         final_md_path = file_output_dir / f"{download_id}.md"
@@ -1494,8 +1470,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str,
 
 # ============== Background Processing Functions ==============
 
-def process_ocr_job(job_id: str, input_path: str, original_filename: str,
-                    locale: str | None = None, text_locale: str | None = None):
+def process_ocr_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for OCR processing."""
     # Wait for OCR lock (allows VL jobs to run in parallel)
     update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
@@ -1515,7 +1490,7 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str,
             output_filename = f"{base_name}_searchable_{file_id}.pdf"
             output_path = OUTPUT_DIR / output_filename
 
-            result = create_searchable_pdf(input_path, str(output_path), job_id, locale=locale, text_locale=text_locale)
+            result = create_searchable_pdf(input_path, str(output_path), job_id, locale=locale)
 
             # If cancelled after processing finished but before job completion update,
             # respect cancellation and clean up the generated output.
@@ -1574,8 +1549,7 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str,
                 logger.warning(f"Cleanup: Failed to delete upload {input_path}: {e}")
 
 
-def process_markdown_job(job_id: str, input_path: str, original_filename: str,
-                         locale: str | None = None, text_locale: str | None = None):
+def process_markdown_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for Markdown conversion."""
     # Wait for VL lock (allows OCR jobs to run in parallel)
     update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
@@ -1588,7 +1562,7 @@ def process_markdown_job(job_id: str, input_path: str, original_filename: str,
                 update_job(job_id, status='cancelled')
                 return
 
-            result = convert_pdf_to_markdown(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale, text_locale=text_locale)
+            result = convert_pdf_to_markdown(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale)
 
             update_job(job_id,
                 status='done',
@@ -1622,8 +1596,7 @@ def process_markdown_job(job_id: str, input_path: str, original_filename: str,
                 logger.warning(f"Cleanup: Failed to delete upload {input_path}: {e}")
 
 
-def process_word_job(job_id: str, input_path: str, original_filename: str,
-                     locale: str | None = None, text_locale: str | None = None):
+def process_word_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for Word conversion."""
     # Wait for VL lock (allows OCR jobs to run in parallel)
     update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
@@ -1636,7 +1609,7 @@ def process_word_job(job_id: str, input_path: str, original_filename: str,
                 update_job(job_id, status='cancelled')
                 return
 
-            result = convert_pdf_to_word(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale, text_locale=text_locale)
+            result = convert_pdf_to_word(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale)
 
             update_job(job_id,
                 status='done',
@@ -1671,7 +1644,7 @@ def process_word_job(job_id: str, input_path: str, original_filename: str,
 
 
 def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, original_filename: str,
-                            locale: str | None = None, text_locale: str | None = None):
+                            locale: str | None = None):
     """Background worker for dual Markdown+Word export. VL runs once, both jobs updated."""
     import subprocess
 
@@ -1727,7 +1700,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                     markdown_parts.append(f.read())
             markdown_text = "\n\n".join(markdown_parts)
 
-            markdown_text = fix_ocr_text(markdown_text, text_locale or locale)
+            markdown_text = fix_ocr_text(markdown_text, locale)
 
             # Remove generic "Image" alt text from VL model HTML output
             markdown_text = _re.sub(r'alt="Image"', 'alt=""', markdown_text, flags=_re.IGNORECASE)
@@ -1769,7 +1742,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
             # Process markdown for Word (HTML tables -> MD tables)
             with open(final_md_path, "r", encoding="utf-8") as f:
                 word_markdown = f.read()
-            word_markdown = process_markdown_for_word(word_markdown, file_output_dir, text_locale or locale)
+            word_markdown = process_markdown_for_word(word_markdown, file_output_dir, locale)
 
             # Save processed markdown for pandoc
             word_md_path = file_output_dir / f"{download_id}_word.md"
@@ -1911,7 +1884,6 @@ def ocr_endpoint():
         return jsonify({'error': 'No files provided'}), 400
 
     locale = request.headers.get('X-Locale')
-    text_locale = request.headers.get('X-Text-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -1947,7 +1919,7 @@ def ocr_endpoint():
         # Start background processing
         thread = threading.Thread(
             target=process_ocr_job,
-            args=(job_id, str(upload_path), file.filename, locale, text_locale)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -1971,7 +1943,6 @@ def markdown_endpoint():
         return jsonify({'error': 'No files provided'}), 400
 
     locale = request.headers.get('X-Locale')
-    text_locale = request.headers.get('X-Text-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -2002,7 +1973,7 @@ def markdown_endpoint():
 
         thread = threading.Thread(
             target=process_markdown_job,
-            args=(job_id, str(upload_path), file.filename, locale, text_locale)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -2026,7 +1997,6 @@ def word_endpoint():
         return jsonify({'error': 'No files provided'}), 400
 
     locale = request.headers.get('X-Locale')
-    text_locale = request.headers.get('X-Text-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -2057,7 +2027,7 @@ def word_endpoint():
 
         thread = threading.Thread(
             target=process_word_job,
-            args=(job_id, str(upload_path), file.filename, locale, text_locale)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -2081,7 +2051,6 @@ def export_endpoint():
         return jsonify({'error': 'No files provided'}), 400
 
     locale = request.headers.get('X-Locale')
-    text_locale = request.headers.get('X-Text-Locale')
     files = request.files.getlist('files')
     job_pairs = []
     skipped = []
@@ -2122,7 +2091,7 @@ def export_endpoint():
 
         thread = threading.Thread(
             target=process_dual_export_job,
-            args=(md_job_id, word_job_id, str(upload_path), file.filename, locale, text_locale)
+            args=(md_job_id, word_job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -2366,38 +2335,13 @@ def cancel_job(job_id):
 
 @app.route('/api/health')
 def health():
-    startup_started_at = _parse_float_env('PDF_OCR_ENTRYPOINT_STARTED_AT')
-    startup_elapsed_seconds = None
-    if startup_started_at is not None:
-        startup_elapsed_seconds = round(max(0.0, time.time() - startup_started_at), 3)
-
-    with jobs_lock:
-        total_jobs = len(jobs)
-        processing_jobs = sum(1 for job in jobs.values() if job.get('status') == 'processing')
-
-    with progress_lock:
-        progress_entries = len(progress_data)
-
     return jsonify({
         'status': 'ok',
         'device': PADDLE_DEVICE,
-        'requested_device': os.environ.get('PDF_OCR_DEVICE', 'auto'),
         'gpu_enabled': GPU_ENABLED,
-        'gpu_runtime_ready': os.environ.get('PDF_OCR_GPU_READY') == '1',
-        'gpu_name': os.environ.get('PDF_OCR_GPU_NAME') or None,
-        'gpu_driver_version': os.environ.get('PDF_OCR_GPU_DRIVER_VERSION') or None,
         'hpi_enabled': ENABLE_HPI,
-        'hpi_marker_present': HPI_MARKER_PATH.exists(),
-        'hpi_install_status': os.environ.get('PDF_OCR_HPI_INSTALL_STATUS') or None,
         'allow_gpu_parallelism': ALLOW_GPU_PARALLELISM,
         'compiled_with_cuda': paddle.is_compiled_with_cuda(),
-        'startup_elapsed_seconds': startup_elapsed_seconds,
-        'cleanup_interval_seconds': CLEANUP_INTERVAL,
-        'max_file_age_seconds': MAX_FILE_AGE,
-        'job_max_age_seconds': JOB_MAX_AGE,
-        'jobs_total': total_jobs,
-        'jobs_processing': processing_jobs,
-        'progress_entries': progress_entries,
     })
 
 
