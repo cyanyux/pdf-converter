@@ -3,11 +3,15 @@ services:
     build: .
     container_name: pdf-ocr
     runtime: nvidia
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     ports:
       - "5000:5000"
     volumes:
       - pdf-ocr-output:/tmp/pdf_ocr_output
+      - pdf-ocr-paddlex:/root/.paddlex
+      - pdf-ocr-cache:/root/.cache
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
@@ -23,6 +27,8 @@ services:
 
 volumes:
   pdf-ocr-output:
+  pdf-ocr-paddlex:
+  pdf-ocr-cache:
 
 networks:
   app-net:
