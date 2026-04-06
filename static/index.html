@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>文件識別</title>
+    <title data-i18n="title">文件識別</title>
     <link rel="icon" type="image/png" href="/static/興宇智能_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@400;600;700&family=Noto+Serif+SC:wght@400;600;700&family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <style>
         :root {
             --paper: #faf8f5;
@@ -77,7 +77,7 @@
         }
 
         .header h1 {
-            font-family: 'Noto Serif TC', Georgia, serif;
+            font-family: 'Noto Serif TC', 'Noto Serif SC', Georgia, serif;
             font-size: 2rem;
             font-weight: 700;
             color: var(--ink);
@@ -90,6 +90,35 @@
             color: var(--ink-muted);
             font-weight: 300;
             letter-spacing: 0.02em;
+        }
+
+        .lang-switcher {
+            position: absolute;
+            top: 32px;
+            right: 28px;
+        }
+
+        .lang-switcher select {
+            font-family: 'Outfit', sans-serif;
+            font-size: 0.8rem;
+            color: var(--ink-muted);
+            background: var(--paper);
+            border: 1px solid var(--ink-muted);
+            border-radius: 4px;
+            padding: 4px 8px;
+            cursor: pointer;
+            outline: none;
+            appearance: none;
+            -webkit-appearance: none;
+            padding-right: 22px;
+            background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%238a857f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 6px center;
+        }
+
+        .lang-switcher select:hover {
+            border-color: var(--ink-light);
+            color: var(--ink-light);
         }
 
         /* Drop Zone */
@@ -981,9 +1010,16 @@
 </head>
 <body>
     <div class="container">
+        <div class="lang-switcher">
+            <select id="langSelect">
+                <option value="zh-TW">繁體中文</option>
+                <option value="zh-CN">简体中文</option>
+                <option value="en">English</option>
+            </select>
+        </div>
         <header class="header">
-            <h1>文件識別</h1>
-            <p>將掃描檔或圖片 PDF 轉換為可編輯格式</p>
+            <h1 data-i18n="title">文件識別</h1>
+            <p data-i18n="subtitle">將掃描檔或圖片 PDF 轉換為可編輯格式</p>
         </header>
 
         <div class="drop-zone" id="dropZone">
@@ -995,14 +1031,14 @@
                     <line x1="9" y1="15" x2="15" y2="15"></line>
                 </svg>
             </div>
-            <div class="drop-zone-text">拖曳 PDF 檔案至此</div>
-            <div class="drop-zone-hint">或點擊選擇檔案</div>
+            <div class="drop-zone-text" data-i18n="drop_zone_text">拖曳 PDF 檔案至此</div>
+            <div class="drop-zone-hint" data-i18n="drop_zone_hint">或點擊選擇檔案</div>
             <input type="file" class="file-input" id="fileInput" accept=".pdf" multiple>
         </div>
 
         <div class="file-list" id="fileList"></div>
 
-        <div class="section-title">輸出格式</div>
+        <div class="section-title" data-i18n="output_format">輸出格式</div>
         <div class="format-options">
             <label class="format-option" id="modePdf">
                 <input type="checkbox" name="outputMode" value="pdf">
@@ -1014,8 +1050,8 @@
                         <line x1="16" y1="17" x2="8" y2="17"></line>
                     </svg>
                 </div>
-                <div class="format-title">可選取 PDF</div>
-                <div class="format-desc">保留原版面，可複製文字</div>
+                <div class="format-title" data-i18n="fmt_pdf">可選取 PDF</div>
+                <div class="format-desc" data-i18n="fmt_pdf_desc">保留原版面，可複製文字</div>
             </label>
             <label class="format-option" id="modeMarkdown">
                 <input type="checkbox" name="outputMode" value="markdown">
@@ -1027,7 +1063,7 @@
                     </svg>
                 </div>
                 <div class="format-title">Markdown</div>
-                <div class="format-desc">結構化純文字</div>
+                <div class="format-desc" data-i18n="fmt_md_desc">結構化純文字</div>
             </label>
             <label class="format-option" id="modeWord">
                 <input type="checkbox" name="outputMode" value="word">
@@ -1039,23 +1075,23 @@
                     </svg>
                 </div>
                 <div class="format-title">Word</div>
-                <div class="format-desc">可編輯文件</div>
+                <div class="format-desc" data-i18n="fmt_word_desc">可編輯文件</div>
             </label>
         </div>
 
-        <button class="btn-process" id="processBtn" disabled>開始轉換</button>
+        <button class="btn-process" id="processBtn" disabled data-i18n="btn_process">開始轉換</button>
 
         <section class="jobs-section">
             <div class="jobs-header" id="jobsHeader">
-                <span class="jobs-title" id="jobsTitle">轉換結果</span>
+                <span class="jobs-title" id="jobsTitle" data-i18n="results_title">轉換結果</span>
                 <div class="jobs-actions">
                     <button class="btn-action btn-action-download" onclick="downloadAllCompleted()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        全部下載
+                        <span data-i18n="btn_download_all">全部下載</span>
                     </button>
                     <button class="btn-action btn-action-clear" onclick="dismissAllCompleted()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-                        清除全部
+                        <span data-i18n="btn_clear_all">清除全部</span>
                     </button>
                 </div>
             </div>
@@ -1069,19 +1105,19 @@
         <span class="batch-count" id="batchCount">已選取 0 項</span>
         <button class="batch-btn batch-btn-download" onclick="batchDownload()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-            下載
+            <span data-i18n="btn_download">下載</span>
         </button>
         <button class="batch-btn batch-btn-dismiss" onclick="batchDismiss()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
-            移除
+            <span data-i18n="btn_remove">移除</span>
         </button>
-        <button class="batch-btn batch-btn-clear" onclick="clearSelection()">取消選取</button>
+        <button class="batch-btn batch-btn-clear" onclick="clearSelection()" data-i18n="btn_deselect">取消選取</button>
     </div>
 
     <div class="modal" id="previewModal">
         <div class="modal-content">
             <div class="modal-header">
-                <span class="modal-title" id="modalTitle">內容預覽</span>
+                <span class="modal-title" id="modalTitle" data-i18n="preview_title">內容預覽</span>
                 <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
             <div class="modal-body">
@@ -1091,6 +1127,204 @@
     </div>
 
     <script>
+        // ============== i18n ==============
+        const I18N_STORAGE_KEY = 'pdfOcrLocale';
+        const translations = {
+            'zh-TW': {
+                title: '文件識別',
+                subtitle: '將掃描檔或圖片 PDF 轉換為可編輯格式',
+                drop_zone_text: '拖曳 PDF 檔案至此',
+                drop_zone_hint: '或點擊選擇檔案',
+                output_format: '輸出格式',
+                fmt_pdf: '可選取 PDF',
+                fmt_pdf_desc: '保留原版面，可複製文字',
+                fmt_md_desc: '結構化純文字',
+                fmt_word_desc: '可編輯文件',
+                btn_process: '開始轉換',
+                results_title: '轉換結果',
+                btn_download_all: '全部下載',
+                btn_clear_all: '清除全部',
+                btn_download: '下載',
+                btn_remove: '移除',
+                btn_deselect: '取消選取',
+                preview_title: '內容預覽',
+                status_waiting: '等待中',
+                status_processing: '處理中',
+                status_done: '完成',
+                status_error: '失敗',
+                status_cancelled: '已取消',
+                selected_count: '已選取 {count} 項',
+                completed_count: '{count} 項已完成',
+                header_processing: '處理中...',
+                progress_waiting: '等待其他任務完成...',
+                progress_default: '處理中...',
+                result_done: '轉換完成',
+                page_info: '{pages} 頁',
+                page_image_info: '{pages} 頁，{images} 張圖片',
+                error_default: '處理時發生錯誤',
+                btn_cancel: '取消',
+                btn_preview: '預覽',
+                toast_done: '轉換完成',
+                toast_failed: '轉換失敗: {error}',
+                toast_unknown_error: '未知錯誤',
+                toast_error: '錯誤: {msg}',
+                toast_cancelled: '已取消處理',
+                toast_downloading: '開始下載 {count} 個檔案',
+                toast_cleared: '已清除 {count} 項',
+                toast_removed: '已移除 {count} 項',
+                toast_preview_fail: '預覽載入失敗',
+                preview_load_error: '無法載入預覽',
+                unnamed_file: '未命名檔案',
+                reconnecting: '重新連線中...',
+                preparing: '準備中...',
+                server_error: '伺服器錯誤: {status}',
+            },
+            'zh-CN': {
+                title: '\u6587\u4ef6\u8bc6\u522b',
+                subtitle: '\u5c06\u626b\u63cf\u4ef6\u6216\u56fe\u7247 PDF \u8f6c\u6362\u4e3a\u53ef\u7f16\u8f91\u683c\u5f0f',
+                drop_zone_text: '\u62d6\u62fd PDF \u6587\u4ef6\u81f3\u6b64',
+                drop_zone_hint: '\u6216\u70b9\u51fb\u9009\u62e9\u6587\u4ef6',
+                output_format: '\u8f93\u51fa\u683c\u5f0f',
+                fmt_pdf: '\u53ef\u9009\u53d6 PDF',
+                fmt_pdf_desc: '\u4fdd\u7559\u539f\u7248\u9762\uff0c\u53ef\u590d\u5236\u6587\u5b57',
+                fmt_md_desc: '\u7ed3\u6784\u5316\u7eaf\u6587\u672c',
+                fmt_word_desc: '\u53ef\u7f16\u8f91\u6587\u6863',
+                btn_process: '\u5f00\u59cb\u8f6c\u6362',
+                results_title: '\u8f6c\u6362\u7ed3\u679c',
+                btn_download_all: '\u5168\u90e8\u4e0b\u8f7d',
+                btn_clear_all: '\u6e05\u9664\u5168\u90e8',
+                btn_download: '\u4e0b\u8f7d',
+                btn_remove: '\u79fb\u9664',
+                btn_deselect: '\u53d6\u6d88\u9009\u53d6',
+                preview_title: '\u5185\u5bb9\u9884\u89c8',
+                status_waiting: '\u7b49\u5f85\u4e2d',
+                status_processing: '\u5904\u7406\u4e2d',
+                status_done: '\u5b8c\u6210',
+                status_error: '\u5931\u8d25',
+                status_cancelled: '\u5df2\u53d6\u6d88',
+                selected_count: '\u5df2\u9009\u53d6 {count} \u9879',
+                completed_count: '{count} \u9879\u5df2\u5b8c\u6210',
+                header_processing: '\u5904\u7406\u4e2d...',
+                progress_waiting: '\u7b49\u5f85\u5176\u4ed6\u4efb\u52a1\u5b8c\u6210...',
+                progress_default: '\u5904\u7406\u4e2d...',
+                result_done: '\u8f6c\u6362\u5b8c\u6210',
+                page_info: '{pages} \u9875',
+                page_image_info: '{pages} \u9875\uff0c{images} \u5f20\u56fe\u7247',
+                error_default: '\u5904\u7406\u65f6\u53d1\u751f\u9519\u8bef',
+                btn_cancel: '\u53d6\u6d88',
+                btn_preview: '\u9884\u89c8',
+                toast_done: '\u8f6c\u6362\u5b8c\u6210',
+                toast_failed: '\u8f6c\u6362\u5931\u8d25: {error}',
+                toast_unknown_error: '\u672a\u77e5\u9519\u8bef',
+                toast_error: '\u9519\u8bef: {msg}',
+                toast_cancelled: '\u5df2\u53d6\u6d88\u5904\u7406',
+                toast_downloading: '\u5f00\u59cb\u4e0b\u8f7d {count} \u4e2a\u6587\u4ef6',
+                toast_cleared: '\u5df2\u6e05\u9664 {count} \u9879',
+                toast_removed: '\u5df2\u79fb\u9664 {count} \u9879',
+                toast_preview_fail: '\u9884\u89c8\u8f7d\u5165\u5931\u8d25',
+                preview_load_error: '\u65e0\u6cd5\u52a0\u8f7d\u9884\u89c8',
+                unnamed_file: '\u672a\u547d\u540d\u6587\u4ef6',
+                reconnecting: '\u91cd\u65b0\u8fde\u7ebf\u4e2d...',
+                preparing: '\u51c6\u5907\u4e2d...',
+                server_error: '\u670d\u52a1\u5668\u9519\u8bef: {status}',
+            },
+            'en': {
+                title: 'Document Recognition',
+                subtitle: 'Convert scanned or image PDFs to editable formats',
+                drop_zone_text: 'Drop PDF files here',
+                drop_zone_hint: 'or click to select files',
+                output_format: 'Output Format',
+                fmt_pdf: 'Searchable PDF',
+                fmt_pdf_desc: 'Preserves layout, selectable text',
+                fmt_md_desc: 'Structured plain text',
+                fmt_word_desc: 'Editable document',
+                btn_process: 'Start Conversion',
+                results_title: 'Results',
+                btn_download_all: 'Download All',
+                btn_clear_all: 'Clear All',
+                btn_download: 'Download',
+                btn_remove: 'Remove',
+                btn_deselect: 'Deselect',
+                preview_title: 'Content Preview',
+                status_waiting: 'Waiting',
+                status_processing: 'Processing',
+                status_done: 'Done',
+                status_error: 'Failed',
+                status_cancelled: 'Cancelled',
+                selected_count: '{count} selected',
+                completed_count: '{count} completed',
+                header_processing: 'Processing...',
+                progress_waiting: 'Waiting for other tasks...',
+                progress_default: 'Processing...',
+                result_done: 'Conversion complete',
+                page_info_one: '{pages} page',
+                page_info: '{pages} pages',
+                page_image_info_one: '{pages} page, {images} image',
+                page_image_info: '{pages} pages, {images} images',
+                error_default: 'An error occurred during processing',
+                btn_cancel: 'Cancel',
+                btn_preview: 'Preview',
+                toast_done: 'Conversion complete',
+                toast_failed: 'Conversion failed: {error}',
+                toast_unknown_error: 'Unknown error',
+                toast_error: 'Error: {msg}',
+                toast_cancelled: 'Processing cancelled',
+                toast_downloading: 'Downloading {count} files',
+                toast_cleared: 'Cleared {count} items',
+                toast_removed: 'Removed {count} items',
+                toast_preview_fail: 'Failed to load preview',
+                preview_load_error: 'Unable to load preview',
+                unnamed_file: 'Unnamed file',
+                reconnecting: 'Reconnecting...',
+                preparing: 'Preparing...',
+                server_error: 'Server error: {status}',
+            }
+        };
+
+        let currentLocale = 'zh-TW';
+
+        function detectLocale() {
+            const saved = localStorage.getItem(I18N_STORAGE_KEY);
+            if (saved && translations[saved]) return saved;
+            const lang = (navigator.language || '').toLowerCase();
+            if (lang.startsWith('en')) return 'en';
+            if (lang.includes('hans') || lang === 'zh-cn' || lang === 'zh-sg') return 'zh-CN';
+            return 'zh-TW';
+        }
+
+        function t(key, params) {
+            const table = translations[currentLocale] || translations['zh-TW'];
+            let text = table[key] || translations['zh-TW'][key] || key;
+            if (params) {
+                for (const [k, v] of Object.entries(params)) {
+                    text = text.replace(`{${k}}`, v);
+                }
+            }
+            return text;
+        }
+
+        function applyI18n() {
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (key) el.textContent = t(key);
+            });
+            document.documentElement.lang = currentLocale === 'en' ? 'en' : currentLocale;
+        }
+
+        function setLocale(locale) {
+            if (!translations[locale]) return;
+            currentLocale = locale;
+            localStorage.setItem(I18N_STORAGE_KEY, locale);
+            applyI18n();
+            // Re-render dynamic content
+            updateJobsHeader();
+            updateBatchActions();
+            Object.entries(activeJobs).forEach(([jobId, job]) => renderJobCard(jobId, job));
+        }
+
+        // Initialize locale
+        currentLocale = detectLocale();
+
         const dropZone = document.getElementById('dropZone');
         const fileInput = document.getElementById('fileInput');
         const fileList = document.getElementById('fileList');
@@ -1105,6 +1339,12 @@
         const batchCount = document.getElementById('batchCount');
         const jobsHeader = document.getElementById('jobsHeader');
         const jobsTitle = document.getElementById('jobsTitle');
+
+        // Language selector
+        const langSelect = document.getElementById('langSelect');
+        langSelect.value = currentLocale;
+        langSelect.addEventListener('change', () => setLocale(langSelect.value));
+        applyI18n();
 
         const JOB_STORAGE_KEY = 'pdfOcrJobs';
         const JOB_STORAGE_VERSION = 2;
@@ -1157,7 +1397,7 @@
             const current = Number.isFinite(progress.current) ? progress.current : 0;
             const total = Number.isFinite(progress.total) ? progress.total : 0;
             const percent = Number.isFinite(progress.percent) ? progress.percent : 0;
-            const message = typeof progress.message === 'string' ? progress.message : '處理中...';
+            const message = typeof progress.message === 'string' ? progress.message : t('progress_default');
             const status = typeof progress.status === 'string' ? progress.status : '';
             return { current, total, percent, message, status };
         }
@@ -1198,10 +1438,10 @@
                         const jobId = item;
                         const job = {
                             job_id: jobId,
-                            filename: '重新連線中...',
+                            filename: t('reconnecting'),
                             status: 'processing',
                             mode: 'unknown',
-                            progress: { percent: 0, message: '重新連線中...', status: 'waiting' }
+                            progress: { percent: 0, message: t('reconnecting'), status: 'waiting' }
                         };
                         activeJobs[jobId] = job;
                         ensureJobOrder(jobId);
@@ -1212,10 +1452,10 @@
                     if (!jobId) return;
                     const job = {
                         job_id: jobId,
-                        filename: item.filename || '未命名檔案',
+                        filename: item.filename || t('unnamed_file'),
                         status: item.status || 'processing',
                         mode: item.mode || 'ocr',
-                        progress: normalizeProgress(item.progress) || { percent: 0, message: '重新連線中...' }
+                        progress: normalizeProgress(item.progress) || { percent: 0, message: t('reconnecting') }
                     };
                     activeJobs[jobId] = job;
                     ensureJobOrder(jobId);
@@ -1376,7 +1616,7 @@
         function updateBatchActions() {
             const count = selectedJobs.size;
             if (count > 0) {
-                batchCount.textContent = `已選取 ${count} 項`;
+                batchCount.textContent = t('selected_count', { count });
                 batchActions.classList.add('show');
             } else {
                 batchActions.classList.remove('show');
@@ -1389,7 +1629,7 @@
 
             if (total > 0) {
                 jobsHeader.classList.add('show');
-                jobsTitle.textContent = completed > 0 ? `${completed} 項已完成` : '處理中...';
+                jobsTitle.textContent = completed > 0 ? t('completed_count', { count: completed }) : t('header_processing');
             } else {
                 jobsHeader.classList.remove('show');
             }
@@ -1432,7 +1672,7 @@
             }
             updateBatchActions();
             updateJobsHeader();
-            showToast(`開始下載 ${jobIds.length} 個檔案`);
+            showToast(t('toast_downloading', { count: jobIds.length }));
         }
 
         async function dismissAllCompleted() {
@@ -1451,7 +1691,7 @@
             }
             updateBatchActions();
             updateJobsHeader();
-            showToast(`已清除 ${jobIds.length} 項`);
+            showToast(t('toast_cleared', { count: jobIds.length }));
         }
 
         function animateRemove(jobId) {
@@ -1486,18 +1726,18 @@
 
         function getStatusText(status, progress) {
             if (status === 'processing') {
-                if (progress?.status === 'waiting') return '等待中';
-                return '處理中';
+                if (progress?.status === 'waiting') return t('status_waiting');
+                return t('status_processing');
             }
-            return { done: '完成', error: '失敗', cancelled: '已取消' }[status] || status;
+            return { done: t('status_done'), error: t('status_error'), cancelled: t('status_cancelled') }[status] || status;
         }
 
         function formatProgressText(job) {
             if (job.status !== 'processing') return '';
             const progress = job.progress || {};
             if (progress.message) return progress.message;
-            if (progress.status === 'waiting') return '等待其他任務完成...';
-            return '處理中...';
+            if (progress.status === 'waiting') return t('progress_waiting');
+            return t('progress_default');
         }
 
         function renderJobCard(jobId, job) {
@@ -1559,7 +1799,7 @@
 	                        <div class="progress-text">${escapeHtml(formatProgressText(job))}</div>
 	                    </div>
                     <button class="btn-cancel" data-action="cancel" data-job-id="${escapeAttr(jobId)}">
-                        ${icons.stop} 取消
+                        ${icons.stop} ${escapeHtml(t('btn_cancel'))}
                     </button>
                 `;
             }
@@ -1576,13 +1816,16 @@
                         : `/api/download/word/${encodeURIComponent(r.download_id)}${nameParam}`;
                 const baseName = r.original_name ? r.original_name.replace(/\.[^/.]+$/, '') : r.download_id;
                 const filename = mode === 'ocr' ? r.original_name : `${baseName}.${mode === 'markdown' ? 'zip' : 'docx'}`;
-                const pageInfo = r.total_pages + ' 頁' + (r.images_count > 0 ? `，${r.images_count} 張圖片` : '');
+                const p = r.total_pages, im = r.images_count;
+                const pageInfo = im > 0
+                    ? t(currentLocale === 'en' && im === 1 ? 'page_image_info_one' : 'page_image_info', { pages: p, images: im })
+                    : t(currentLocale === 'en' && p === 1 ? 'page_info_one' : 'page_info', { pages: p });
 
                 resultHtml = `
                     <div class="job-result">
                         <div class="job-result-icon">${icons.check}</div>
                         <div class="job-result-text">
-                            <h3>轉換完成</h3>
+                            <h3>${escapeHtml(t('result_done'))}</h3>
                             <p>${pageInfo}</p>
                         </div>
                     </div>
@@ -1594,11 +1837,11 @@
                             data-url="${escapeAttr(downloadUrl)}"
                             data-filename="${escapeAttr(filename)}"
                         >
-                            ${icons.download} 下載
+                            ${icons.download} ${escapeHtml(t('btn_download'))}
                         </button>
-                        ${mode === 'markdown' ? `<button class="btn-secondary" data-action="preview" data-folder-id="${escapeAttr(r.download_id)}">${icons.eye} 預覽</button>` : ''}
+                        ${mode === 'markdown' ? `<button class="btn-secondary" data-action="preview" data-folder-id="${escapeAttr(r.download_id)}">${icons.eye} ${escapeHtml(t('btn_preview'))}</button>` : ''}
                         <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="${escapeAttr(r.download_id)}">
-                            ${icons.trash} 移除
+                            ${icons.trash} ${escapeHtml(t('btn_remove'))}
                         </button>
                     </div>
                 `;
@@ -1606,9 +1849,9 @@
 
             if (job.status === 'error') {
                 resultHtml = `
-                    <div class="error-message">${escapeHtml(job.error || '處理時發生錯誤')}</div>
+                    <div class="error-message">${escapeHtml(job.error || t('error_default'))}</div>
                     <div class="job-buttons">
-                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} 移除</button>
+                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} ${escapeHtml(t('btn_remove'))}</button>
                     </div>
                 `;
             }
@@ -1616,7 +1859,7 @@
             if (job.status === 'cancelled') {
                 resultHtml = `
                     <div class="job-buttons">
-                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} 移除</button>
+                        <button class="btn-dismiss" data-action="dismiss" data-job-id="${escapeAttr(jobId)}" data-download-id="">${icons.trash} ${escapeHtml(t('btn_remove'))}</button>
                     </div>
                 `;
             }
@@ -1732,7 +1975,7 @@
                 const job = await response.json();
                 const existingJob = activeJobs[jobId] || {};
                 const normalizedProgress = normalizeProgress(job.progress) || existingJob.progress;
-                job.progress = normalizedProgress || { percent: 0, message: '處理中...' };
+                job.progress = normalizedProgress || { percent: 0, message: t('progress_default') };
                 activeJobs[jobId] = job;
                 ensureJobOrder(jobId);
                 scheduleJobsSave();
@@ -1741,7 +1984,7 @@
                 // Check for terminal states
                 if (job.status === 'done') {
                     if (state.lastStatus !== 'done') {
-                        showToast('轉換完成');
+                        showToast(t('toast_done'));
                     }
                     updateJobsHeader();
                     state.lastStatus = 'done';
@@ -1754,7 +1997,7 @@
                     return;
                 } else if (job.status === 'error') {
                     if (state.lastStatus !== 'error') {
-                        showToast('轉換失敗: ' + (job.error || '未知錯誤'), 'error');
+                        showToast(t('toast_failed', { error: job.error || t('toast_unknown_error') }), 'error');
                     }
                     updateJobsHeader();
                     state.lastStatus = 'error';
@@ -1807,9 +2050,9 @@
             const formData = new FormData();
             selectedFiles.forEach(file => formData.append('files', file));
 
-            const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+            const headers = csrfToken ? { 'X-CSRFToken': csrfToken, 'X-Locale': currentLocale } : { 'X-Locale': currentLocale };
             const response = await fetch(endpoint, { method: 'POST', body: formData, headers });
-            if (!response.ok) throw new Error('伺服器錯誤: ' + response.status);
+            if (!response.ok) throw new Error(t('server_error', { status: response.status }));
 
             const data = await response.json();
             const jobs = data.jobs || [];
@@ -1818,7 +2061,7 @@
                     filename: job.filename,
                     status: 'processing',
                     mode: modeNames[mode],
-                    progress: { percent: 0, message: '準備中...' }
+                    progress: { percent: 0, message: t('preparing') }
                 };
                 ensureJobOrder(job.job_id);
                 renderJobCard(job.job_id, activeJobs[job.job_id]);
@@ -1845,9 +2088,9 @@
                     const formData = new FormData();
                     selectedFiles.forEach(file => formData.append('files', file));
 
-                    const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+                    const headers = csrfToken ? { 'X-CSRFToken': csrfToken, 'X-Locale': currentLocale } : { 'X-Locale': currentLocale };
                     const response = await fetch('/api/export', { method: 'POST', body: formData, headers });
-                    if (!response.ok) throw new Error('伺服器錯誤: ' + response.status);
+                    if (!response.ok) throw new Error(t('server_error', { status: response.status }));
 
                     const data = await response.json();
 
@@ -1858,7 +2101,7 @@
                                 filename: pair.filename,
                                 status: 'processing',
                                 mode: job.mode,
-                                progress: { percent: 0, message: '準備中...' }
+                                progress: { percent: 0, message: t('preparing') }
                             };
                             ensureJobOrder(job.job_id);
                             renderJobCard(job.job_id, activeJobs[job.job_id]);
@@ -1883,7 +2126,7 @@
                 renderFileList();
                 updateProcessButton();
             } catch (error) {
-                showToast('錯誤: ' + error.message);
+                showToast(t('toast_error', { msg: error.message }));
             } finally {
                 processBtn.disabled = selectedFiles.length === 0 || selectedModes.size === 0;
                 processBtn.classList.remove('loading');
@@ -1919,10 +2162,11 @@
 
         async function cancelJob(jobId) {
             try {
-                const headers = csrfToken ? { 'X-CSRFToken': csrfToken } : {};
+                const headers = { 'X-Locale': currentLocale };
+                if (csrfToken) headers['X-CSRFToken'] = csrfToken;
                 const response = await fetch(`/api/cancel/${jobId}`, { method: 'POST', headers });
                 if (response.ok) {
-                    showToast('已取消處理');
+                    showToast(t('toast_cancelled'));
                     if (activeJobs[jobId]) {
                         activeJobs[jobId].status = 'cancelled';
                         renderJobCard(jobId, activeJobs[jobId]);
@@ -1964,7 +2208,7 @@
                 selectedJobs.delete(jobId);
             }
             updateBatchActions();
-            showToast(`開始下載 ${jobIds.length} 個檔案`);
+            showToast(t('toast_downloading', { count: jobIds.length }));
         }
 
         async function batchDismiss() {
@@ -1980,7 +2224,7 @@
                 selectedJobs.delete(jobId);
             }
             updateBatchActions();
-            showToast(`已移除 ${jobIds.length} 項`);
+            showToast(t('toast_removed', { count: jobIds.length }));
         }
 
         function clearSelection() {
@@ -1997,13 +2241,13 @@
         async function previewMarkdown(folderId) {
             try {
                 const response = await fetch(`/api/view/markdown/${encodeURIComponent(folderId)}`);
-                if (!response.ok) throw new Error('無法載入預覽');
+                if (!response.ok) throw new Error(t('preview_load_error'));
                 const data = await response.json();
                 document.getElementById('modalTitle').textContent = data.filename;
                 document.getElementById('markdownContent').textContent = data.content;
                 previewModal.classList.add('show');
             } catch (error) {
-                showToast('預覽載入失敗');
+                showToast(t('toast_preview_fail'));
             }
         }
 

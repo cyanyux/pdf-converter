@@ -332,6 +332,7 @@ def release_idle_models():
 
 # 簡體轉繁體修正（只轉換一對一的字，略過一對多）
 from s2t_dict import S2T_ONE_TO_ONE
+from i18n import msg as _msg, normalize_locale
 
 # Pre-build translation table for O(1) character conversion
 _S2T_TABLE = str.maketrans(S2T_ONE_TO_ONE)
@@ -349,9 +350,26 @@ _IMG_PATTERNS = [
 ]
 
 
-def fix_ocr_text(text: str) -> str:
-    """修正 OCR 誤認的簡體字，只轉換一對一的字，略過一對多。"""
+def fix_ocr_text(text: str, locale: str | None = None) -> str:
+    """修正 OCR 誤認的簡體字，只轉換一對一的字，略過一對多。
+
+    Only applies S→T conversion when locale is zh-TW (default).
+    For zh-CN and en, text is returned as-is.
+    """
+    if normalize_locale(locale) != 'zh-TW':
+        return text
     return text.translate(_S2T_TABLE)
+
+
+# All possible cancel error message variants across locales
+_CANCEL_MARKERS = tuple(
+    _msg('err_cancelled', loc) for loc in ('zh-TW', 'zh-CN', 'en')
+)
+
+
+def _is_cancel_error(error_msg: str) -> bool:
+    """Check if an error message indicates cancellation (any locale)."""
+    return any(marker in error_msg for marker in _CANCEL_MARKERS)
 
 
 def validate_pdf_file(file) -> bool:
@@ -412,7 +430,8 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
                         original_filename: str = None,
                         extra_steps: int = 0,
                         mirror_task_ids: list[str] | None = None,
-                        cancel_task_ids: list[str] | None = None) -> tuple[list, Path, int, str]:
+                        cancel_task_ids: list[str] | None = None,
+                        locale: str | None = None) -> tuple[list, Path, int, str]:
     """
     Shared VL processing logic for both Markdown and Word export.
     Returns (restructured_results, file_output_dir, total_pages, download_id).
@@ -428,6 +447,7 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         cancel_task_ids: Optional list of task IDs; VL processing is cancelled only if
                          *all* of these IDs are cancelled. If omitted, cancellation is
                          based on task_id only.
+        locale: User locale for translated messages and OCR text conversion.
     """
     import fitz
 
@@ -435,17 +455,17 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
     try:
         doc = fitz.open(input_pdf_path)
     except Exception as e:
-        raise RuntimeError(f"無法開啟 PDF 檔案: {e}")
+        raise RuntimeError(_msg('err_open_pdf', locale, detail=str(e)))
 
     # Check for encryption
     if doc.is_encrypted:
         doc.close()
-        raise RuntimeError("無法處理加密的 PDF 檔案")
+        raise RuntimeError(_msg('err_encrypted_pdf', locale))
 
     total_pages = len(doc)
     if total_pages == 0:
         doc.close()
-        raise RuntimeError("PDF 檔案沒有頁面")
+        raise RuntimeError(_msg('err_empty_pdf', locale))
 
     # Use total_steps for consistent progress tracking throughout the pipeline
     total_steps = total_pages + extra_steps
@@ -457,7 +477,7 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         return is_cancelled(task_id)
 
     for tid in task_ids:
-        update_progress(tid, 0, total_steps, 'processing', f'開始轉換 {total_pages} 頁...')
+        update_progress(tid, 0, total_steps, 'processing', _msg('converting_start', locale, pages=total_pages))
 
     pipeline = get_vl_pipeline()
 
@@ -478,11 +498,11 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         for page_num in range(total_pages):
             # Check for cancellation
             if _should_cancel():
-                raise RuntimeError("已取消處理")
+                raise RuntimeError(_msg('err_cancelled', locale))
 
             for tid in task_ids:
                 update_progress(tid, page_num + 1, total_steps, 'processing',
-                               f'辨識第 {page_num + 1}/{total_pages} 頁...')
+                               _msg('recognizing_page', locale, current=page_num + 1, total=total_pages))
 
             # Render page to image
             # 1.5x zoom: 平衡品質與記憶體 (VL 模型會自行處理解析度)
@@ -507,7 +527,7 @@ def process_pdf_with_vl(input_pdf_path: str, output_dir: Path, task_id: str,
         doc_closed = True
 
         for tid in task_ids:
-            update_progress(tid, total_pages, total_steps, 'saving', '整合頁面內容...')
+            update_progress(tid, total_pages, total_steps, 'saving', _msg('consolidating', locale))
 
         # Restructure pages with cross-page table merging and title releveling
         restructured = pipeline.restructure_pages(
@@ -616,12 +636,13 @@ def pixmap_to_numpy(pix: fitz.Pixmap) -> np.ndarray:
     return img
 
 
-def parse_ocr_result(res: dict, min_confidence: float) -> list:
+def parse_ocr_result(res: dict, min_confidence: float, locale: str | None = None) -> list:
     """Parse single OCR result dict into standardized format.
 
     Args:
         res: Single result dict from PaddleOCR predict()
         min_confidence: Minimum confidence score to include a text block
+        locale: User locale for text conversion (S→T only for zh-TW)
 
     Returns:
         List of OCR data dicts with text, poly, and score
@@ -648,7 +669,7 @@ def parse_ocr_result(res: dict, min_confidence: float) -> list:
                 continue
 
             ocr_data.append({
-                'text': fix_ocr_text(text),
+                'text': fix_ocr_text(text, locale),
                 'poly': poly.tolist() if hasattr(poly, 'tolist') else poly,
                 'score': score
             })
@@ -656,12 +677,13 @@ def parse_ocr_result(res: dict, min_confidence: float) -> list:
     return ocr_data
 
 
-def ocr_image(image, min_confidence: float = 0.5) -> list:
+def ocr_image(image, min_confidence: float = 0.5, locale: str | None = None) -> list:
     """Run OCR on an image and return text with bounding boxes.
 
     Args:
         image: Either a file path (str) or numpy array (H, W, 3) in BGR format
         min_confidence: Minimum confidence score to include a text block (0.0-1.0)
+        locale: User locale for text conversion
 
     Returns:
         List of OCR results with text, polygon coordinates, and confidence scores
@@ -676,12 +698,12 @@ def ocr_image(image, min_confidence: float = 0.5) -> list:
 
     ocr_data = []
     for res in result:
-        ocr_data.extend(parse_ocr_result(res, min_confidence))
+        ocr_data.extend(parse_ocr_result(res, min_confidence, locale))
 
     return ocr_data
 
 
-def ocr_batch_images(images: list, min_confidence: float = 0.5) -> list:
+def ocr_batch_images(images: list, min_confidence: float = 0.5, locale: str | None = None) -> list:
     """Run OCR on a batch of images for improved throughput.
 
     Processes multiple images in a single OCR call, leveraging GPU parallelism
@@ -705,18 +727,19 @@ def ocr_batch_images(images: list, min_confidence: float = 0.5) -> list:
     except Exception as e:
         logger.warning(f"OCR: Batch OCR failed: {e}")
         # Fallback to individual processing
-        return [ocr_image(img, min_confidence) for img in images]
+        return [ocr_image(img, min_confidence, locale) for img in images]
 
     # Results come back as a flat list, one result dict per image
     batch_ocr_data = []
     for res in results:
-        batch_ocr_data.append(parse_ocr_result(res, min_confidence))
+        batch_ocr_data.append(parse_ocr_result(res, min_confidence, locale))
 
     return batch_ocr_data
 
 
 def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: str,
-                          dpi: int = 200, min_confidence: float = 0.5) -> dict:
+                          dpi: int = 200, min_confidence: float = 0.5,
+                          locale: str | None = None) -> dict:
     """Create a searchable PDF by adding invisible text layer to original PDF.
 
     Uses batch OCR processing for 30-50% faster multi-page documents.
@@ -743,17 +766,17 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
         try:
             src_doc = fitz.open(input_pdf_path)
         except Exception as e:
-            raise RuntimeError(f"無法開啟 PDF 檔案: {e}")
+            raise RuntimeError(_msg('err_open_pdf', locale, detail=str(e)))
 
         # Check for encryption
         if src_doc.is_encrypted:
             src_doc.close()
-            raise RuntimeError("無法處理加密的 PDF 檔案")
+            raise RuntimeError(_msg('err_encrypted_pdf', locale))
 
         total_pages = len(src_doc)
         if total_pages == 0:
             src_doc.close()
-            raise RuntimeError("PDF 檔案沒有頁面")
+            raise RuntimeError(_msg('err_empty_pdf', locale))
 
         zoom = dpi / PDF_POINTS_PER_INCH
 
@@ -768,19 +791,19 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
         if metadata:
             new_doc.set_metadata(metadata)
 
-        update_progress(task_id, 0, total_pages, 'processing', f'開始處理 {total_pages} 頁...')
+        update_progress(task_id, 0, total_pages, 'processing', _msg('processing_start', locale, pages=total_pages))
         failed_pages = []
 
         # Process pages in batches for better GPU utilization
         for batch_start in range(0, total_pages, OCR_BATCH_SIZE):
             # Check for cancellation at batch start
             if is_cancelled(task_id):
-                raise RuntimeError("已取消處理")
+                raise RuntimeError(_msg('err_cancelled', locale))
 
             batch_end = min(batch_start + OCR_BATCH_SIZE, total_pages)
 
             update_progress(task_id, batch_start + 1, total_pages, 'processing',
-                           f'辨識第 {batch_start + 1}-{batch_end}/{total_pages} 頁...')
+                           _msg('recognizing_pages', locale, start=batch_start + 1, end=batch_end, total=total_pages))
 
             # Phase 1: Render all pages in batch to images
             # Note: We don't store pixmaps here to reduce memory pressure.
@@ -824,10 +847,10 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
 
             # Phase 2: Run batch OCR on all images
             try:
-                batch_ocr_results = ocr_batch_images(batch_images, min_confidence=min_confidence)
+                batch_ocr_results = ocr_batch_images(batch_images, min_confidence=min_confidence, locale=locale)
             except Exception as e:
                 logger.warning(f"OCR: Batch OCR failed, falling back to individual: {e}")
-                batch_ocr_results = [ocr_image(img, min_confidence) for img in batch_images]
+                batch_ocr_results = [ocr_image(img, min_confidence, locale) for img in batch_images]
             finally:
                 # Free batch images memory (always reached even if fallback fails)
                 del batch_images
@@ -946,12 +969,12 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
         src_doc.close()
         src_doc = None
 
-        update_progress(task_id, total_pages, total_pages, 'saving', '儲存 PDF 中...')
+        update_progress(task_id, total_pages, total_pages, 'saving', _msg('saving_pdf', locale))
         new_doc.save(output_pdf_path, garbage=4, deflate=True)
         new_doc.close()
         new_doc = None
 
-        update_progress(task_id, total_pages, total_pages, 'done', '完成!')
+        update_progress(task_id, total_pages, total_pages, 'done', _msg('done', locale))
 
         result = {
             'total_pages': total_pages,
@@ -959,7 +982,7 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
         }
 
         if failed_pages:
-            result['warning'] = f"部分頁面處理失敗: {failed_pages}"
+            result['warning'] = _msg('err_partial_pages', locale, pages=failed_pages)
             logger.warning(f"OCR: Completed with warnings. Failed pages: {failed_pages}")
 
         return result
@@ -989,17 +1012,18 @@ def create_searchable_pdf(input_pdf_path: str, output_pdf_path: str, task_id: st
         raise
 
 
-def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str, original_filename: str = None) -> dict:
+def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
+                            original_filename: str = None, locale: str | None = None) -> dict:
     """Convert PDF to Markdown using PaddleOCR-VL-1.5."""
 
     # Use shared VL processing (now returns download_id for unique folder naming)
     restructured, file_output_dir, total_pages, download_id = process_pdf_with_vl(
-        input_pdf_path, output_dir, task_id, original_filename
+        input_pdf_path, output_dir, task_id, original_filename, locale=locale
     )
 
     try:
         if is_cancelled(task_id):
-            raise RuntimeError("已取消處理")
+            raise RuntimeError(_msg('err_cancelled', locale))
 
         # Save to markdown
         for res in restructured:
@@ -1008,7 +1032,7 @@ def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
         # Find and concatenate all markdown files (VL may produce multiple)
         md_files = sorted(file_output_dir.glob("*.md"))
         if not md_files:
-            raise RuntimeError("VL 模型未產生 Markdown 檔案")
+            raise RuntimeError(_msg('err_no_markdown', locale))
 
         # Concatenate all markdown files if multiple exist
         markdown_parts = []
@@ -1017,8 +1041,8 @@ def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
                 markdown_parts.append(f.read())
         markdown_text = "\n\n".join(markdown_parts)
 
-        # Fix simplified Chinese characters
-        markdown_text = fix_ocr_text(markdown_text)
+        # Fix simplified Chinese characters (only for zh-TW)
+        markdown_text = fix_ocr_text(markdown_text, locale)
 
         # Remove generic "Image" alt text from VL model HTML output (provides no useful info)
         markdown_text = _re.sub(r'alt="Image"', 'alt=""', markdown_text, flags=_re.IGNORECASE)
@@ -1053,7 +1077,7 @@ def convert_pdf_to_markdown(input_pdf_path: str, output_dir: Path, task_id: str,
         for pattern in image_patterns:
             saved_images.extend(file_output_dir.glob(pattern))
 
-        update_progress(task_id, total_pages, total_pages, 'done', '完成!')
+        update_progress(task_id, total_pages, total_pages, 'done', _msg('done', locale))
 
         return {
             'total_pages': total_pages,
@@ -1293,18 +1317,19 @@ def html_img_to_markdown(html_content: str, output_dir: Path = None) -> str:
     return f'\n\n![{alt}]({src})\n\n'
 
 
-def process_markdown_for_word(markdown_text: str, output_dir: Path = None) -> str:
+def process_markdown_for_word(markdown_text: str, output_dir: Path = None, locale: str | None = None) -> str:
     """Process markdown text to convert HTML elements for Word compatibility.
 
     Args:
         markdown_text: Raw markdown text potentially containing HTML elements
         output_dir: Optional directory for extracting data URI images
+        locale: User locale for text conversion
 
     Returns:
         Processed markdown with HTML tables/images converted to markdown syntax
     """
-    # Fix simplified Chinese characters
-    markdown_text = fix_ocr_text(markdown_text)
+    # Fix simplified Chinese characters (only for zh-TW)
+    markdown_text = fix_ocr_text(markdown_text, locale)
 
     # Convert HTML tables - loop until no more matches to handle nested cases
     # (e.g., a table replacement might reveal another table pattern)
@@ -1340,7 +1365,8 @@ def process_markdown_for_word(markdown_text: str, output_dir: Path = None) -> st
     return markdown_text
 
 
-def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, original_filename: str = None) -> dict:
+def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str,
+                        original_filename: str = None, locale: str | None = None) -> dict:
     """Convert PDF to Word document using PaddleOCR-VL-1.5 + pandoc."""
     import subprocess
 
@@ -1351,7 +1377,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
 
     # Use shared VL processing with extra_steps for consistent progress tracking
     restructured, file_output_dir, total_pages, download_id = process_pdf_with_vl(
-        input_pdf_path, output_dir, task_id, original_filename, extra_steps=extra_steps
+        input_pdf_path, output_dir, task_id, original_filename, extra_steps=extra_steps, locale=locale
     )
 
     # Total steps = VL pages + post-processing steps
@@ -1359,7 +1385,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
 
     try:
         if is_cancelled(task_id):
-            raise RuntimeError("已取消處理")
+            raise RuntimeError(_msg('err_cancelled', locale))
 
         # Save to markdown
         for res in restructured:
@@ -1368,7 +1394,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
         # Find and concatenate all markdown files (VL may produce multiple)
         md_files = sorted(file_output_dir.glob("*.md"))
         if not md_files:
-            raise RuntimeError("VL 模型未產生 Markdown 檔案")
+            raise RuntimeError(_msg('err_no_markdown', locale))
 
         # Concatenate all markdown files if multiple exist
         markdown_parts = []
@@ -1378,8 +1404,8 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
         markdown_text = "\n\n".join(markdown_parts)
 
         # Process HTML elements in markdown
-        update_progress(task_id, total_pages + 1, total_steps, 'processing', '處理表格與圖片...')
-        markdown_text = process_markdown_for_word(markdown_text, file_output_dir)
+        update_progress(task_id, total_pages + 1, total_steps, 'processing', _msg('processing_tables', locale))
+        markdown_text = process_markdown_for_word(markdown_text, file_output_dir, locale)
 
         # Save processed markdown with correct name (use download_id for consistency)
         final_md_path = file_output_dir / f"{download_id}.md"
@@ -1390,7 +1416,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
             if md_file != final_md_path and md_file.exists():
                 md_file.unlink()
 
-        update_progress(task_id, total_pages + 1, total_steps, 'converting', '轉換為 Word 中...')
+        update_progress(task_id, total_pages + 1, total_steps, 'converting', _msg('converting_word', locale))
 
         # Convert Markdown to Word using pandoc
         docx_filename = f"{download_id}.docx"
@@ -1398,7 +1424,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
 
         try:
             if is_cancelled(task_id):
-                raise RuntimeError("已取消處理")
+                raise RuntimeError(_msg('err_cancelled', locale))
 
             subprocess.run(
                 ['pandoc', str(final_md_path), '-o', str(docx_path),
@@ -1410,12 +1436,12 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
                 timeout=PANDOC_TIMEOUT
             )
         except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Pandoc conversion timed out after {PANDOC_TIMEOUT} seconds")
+            raise RuntimeError(_msg('err_pandoc_timeout', locale, seconds=PANDOC_TIMEOUT))
         except subprocess.CalledProcessError as e:
             error_detail = f"stdout: {e.stdout.decode()}, stderr: {e.stderr.decode()}"
-            raise RuntimeError(f"Pandoc conversion failed: {error_detail}")
+            raise RuntimeError(_msg('err_pandoc_failed', locale, detail=error_detail))
         except FileNotFoundError:
-            raise RuntimeError("Pandoc not installed. Please install pandoc.")
+            raise RuntimeError(_msg('err_pandoc_missing', locale))
 
         # Post-process: fix blue headings and ensure proper styling
         _fix_word_styles(docx_path)
@@ -1426,7 +1452,7 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
         for pattern in image_patterns:
             images.extend(file_output_dir.glob(pattern))
 
-        update_progress(task_id, total_steps, total_steps, 'done', '完成!')
+        update_progress(task_id, total_steps, total_steps, 'done', _msg('done', locale))
 
         return {
             'total_pages': total_pages,
@@ -1444,10 +1470,10 @@ def convert_pdf_to_word(input_pdf_path: str, output_dir: Path, task_id: str, ori
 
 # ============== Background Processing Functions ==============
 
-def process_ocr_job(job_id: str, input_path: str, original_filename: str):
+def process_ocr_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for OCR processing."""
     # Wait for OCR lock (allows VL jobs to run in parallel)
-    update_progress(job_id, 0, 1, 'waiting', '等待其他任務完成...')
+    update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
 
     output_path = None
 
@@ -1455,7 +1481,7 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
         try:
             # Check if cancelled while waiting
             if is_cancelled(job_id):
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
                 return
 
@@ -1464,7 +1490,7 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
             output_filename = f"{base_name}_searchable_{file_id}.pdf"
             output_path = OUTPUT_DIR / output_filename
 
-            result = create_searchable_pdf(input_path, str(output_path), job_id)
+            result = create_searchable_pdf(input_path, str(output_path), job_id, locale=locale)
 
             # If cancelled after processing finished but before job completion update,
             # respect cancellation and clean up the generated output.
@@ -1474,7 +1500,7 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
                         output_path.unlink()
                     except Exception:
                         pass
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
                 return
 
@@ -1502,8 +1528,8 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
                 except Exception:
                     pass
 
-            if '已取消' in error_msg:
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+            if _is_cancel_error(error_msg):
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
             else:
                 update_progress(job_id, 0, 0, 'error', error_msg)
@@ -1523,20 +1549,20 @@ def process_ocr_job(job_id: str, input_path: str, original_filename: str):
                 logger.warning(f"Cleanup: Failed to delete upload {input_path}: {e}")
 
 
-def process_markdown_job(job_id: str, input_path: str, original_filename: str):
+def process_markdown_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for Markdown conversion."""
     # Wait for VL lock (allows OCR jobs to run in parallel)
-    update_progress(job_id, 0, 1, 'waiting', '等待其他任務完成...')
+    update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
 
     with vl_processing_lock:
         try:
             # Check if cancelled while waiting
             if is_cancelled(job_id):
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
                 return
 
-            result = convert_pdf_to_markdown(input_path, OUTPUT_DIR, job_id, original_filename)
+            result = convert_pdf_to_markdown(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale)
 
             update_job(job_id,
                 status='done',
@@ -1550,8 +1576,8 @@ def process_markdown_job(job_id: str, input_path: str, original_filename: str):
         except Exception as e:
             import traceback
             error_msg = str(e)
-            if '已取消' in error_msg:
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+            if _is_cancel_error(error_msg):
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
             else:
                 update_progress(job_id, 0, 0, 'error', error_msg)
@@ -1570,20 +1596,20 @@ def process_markdown_job(job_id: str, input_path: str, original_filename: str):
                 logger.warning(f"Cleanup: Failed to delete upload {input_path}: {e}")
 
 
-def process_word_job(job_id: str, input_path: str, original_filename: str):
+def process_word_job(job_id: str, input_path: str, original_filename: str, locale: str | None = None):
     """Background worker for Word conversion."""
     # Wait for VL lock (allows OCR jobs to run in parallel)
-    update_progress(job_id, 0, 1, 'waiting', '等待其他任務完成...')
+    update_progress(job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
 
     with vl_processing_lock:
         try:
             # Check if cancelled while waiting
             if is_cancelled(job_id):
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
                 return
 
-            result = convert_pdf_to_word(input_path, OUTPUT_DIR, job_id, original_filename)
+            result = convert_pdf_to_word(input_path, OUTPUT_DIR, job_id, original_filename, locale=locale)
 
             update_job(job_id,
                 status='done',
@@ -1597,8 +1623,8 @@ def process_word_job(job_id: str, input_path: str, original_filename: str):
         except Exception as e:
             import traceback
             error_msg = str(e)
-            if '已取消' in error_msg:
-                update_progress(job_id, 0, 0, 'cancelled', '已取消')
+            if _is_cancel_error(error_msg):
+                update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(job_id, status='cancelled')
             else:
                 update_progress(job_id, 0, 0, 'error', error_msg)
@@ -1617,13 +1643,14 @@ def process_word_job(job_id: str, input_path: str, original_filename: str):
                 logger.warning(f"Cleanup: Failed to delete upload {input_path}: {e}")
 
 
-def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, original_filename: str):
+def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, original_filename: str,
+                            locale: str | None = None):
     """Background worker for dual Markdown+Word export. VL runs once, both jobs updated."""
     import subprocess
 
     # Both jobs show waiting initially
-    update_progress(md_job_id, 0, 1, 'waiting', '等待其他任務完成...')
-    update_progress(word_job_id, 0, 1, 'waiting', '等待其他任務完成...')
+    update_progress(md_job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
+    update_progress(word_job_id, 0, 1, 'waiting', _msg('waiting_queue', locale))
 
     with vl_processing_lock:
         try:
@@ -1634,7 +1661,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
             want_word = not is_cancelled(word_job_id)
             if not want_md and not want_word:
                 for jid in [md_job_id, word_job_id]:
-                    update_progress(jid, 0, 0, 'cancelled', '已取消')
+                    update_progress(jid, 0, 0, 'cancelled', _msg('cancelled', locale))
                     update_job(jid, status='cancelled')
                 return
 
@@ -1647,15 +1674,16 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                 extra_steps=extra_steps,
                 mirror_task_ids=[word_job_id],
                 cancel_task_ids=[md_job_id, word_job_id],
+                locale=locale,
             )
 
             total_steps = total_pages + extra_steps
 
             # Phase 2: Save Markdown
             # Markdown job uses total_pages as its total (no extra steps)
-            update_progress(md_job_id, total_pages, total_pages, 'saving', '儲存 Markdown...')
+            update_progress(md_job_id, total_pages, total_pages, 'saving', _msg('saving_markdown', locale))
             # Word job uses total_steps (with extra steps)
-            update_progress(word_job_id, total_pages, total_steps, 'saving', '儲存 Markdown...')
+            update_progress(word_job_id, total_pages, total_steps, 'saving', _msg('saving_markdown', locale))
 
             for res in restructured:
                 res.save_to_markdown(save_path=str(file_output_dir))
@@ -1663,7 +1691,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
             # Find and concatenate all markdown files (VL may produce multiple)
             md_files = sorted(file_output_dir.glob("*.md"))
             if not md_files:
-                raise RuntimeError("VL 模型未產生 Markdown 檔案")
+                raise RuntimeError(_msg('err_no_markdown', locale))
 
             # Concatenate all markdown files if multiple exist
             markdown_parts = []
@@ -1672,7 +1700,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                     markdown_parts.append(f.read())
             markdown_text = "\n\n".join(markdown_parts)
 
-            markdown_text = fix_ocr_text(markdown_text)
+            markdown_text = fix_ocr_text(markdown_text, locale)
 
             # Remove generic "Image" alt text from VL model HTML output
             markdown_text = _re.sub(r'alt="Image"', 'alt=""', markdown_text, flags=_re.IGNORECASE)
@@ -1694,7 +1722,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
 
             # Markdown job done
             if not is_cancelled(md_job_id):
-                update_progress(md_job_id, total_pages, total_pages, 'done', '完成!')
+                update_progress(md_job_id, total_pages, total_pages, 'done', _msg('done', locale))
                 update_job(md_job_id, status='done', result={
                     'total_pages': total_pages,
                     'download_id': download_id,
@@ -1705,16 +1733,16 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
             # Phase 3: Convert to Word
             if is_cancelled(word_job_id):
                 # Word was cancelled; do not waste time on conversion.
-                update_progress(word_job_id, 0, 0, 'cancelled', '已取消')
+                update_progress(word_job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
                 update_job(word_job_id, status='cancelled')
                 return
 
-            update_progress(word_job_id, total_pages + 1, total_steps, 'converting', '轉換為 Word...')
+            update_progress(word_job_id, total_pages + 1, total_steps, 'converting', _msg('converting_word', locale))
 
             # Process markdown for Word (HTML tables -> MD tables)
             with open(final_md_path, "r", encoding="utf-8") as f:
                 word_markdown = f.read()
-            word_markdown = process_markdown_for_word(word_markdown, file_output_dir)
+            word_markdown = process_markdown_for_word(word_markdown, file_output_dir, locale)
 
             # Save processed markdown for pandoc
             word_md_path = file_output_dir / f"{download_id}_word.md"
@@ -1732,12 +1760,12 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
                     cwd=str(file_output_dir), timeout=PANDOC_TIMEOUT
                 )
             except subprocess.TimeoutExpired:
-                raise RuntimeError(f"Pandoc conversion timed out after {PANDOC_TIMEOUT} seconds")
+                raise RuntimeError(_msg('err_pandoc_timeout', locale, seconds=PANDOC_TIMEOUT))
             except subprocess.CalledProcessError as e:
                 error_detail = f"stdout: {e.stdout.decode()}, stderr: {e.stderr.decode()}"
-                raise RuntimeError(f"Pandoc conversion failed: {error_detail}")
+                raise RuntimeError(_msg('err_pandoc_failed', locale, detail=error_detail))
             except FileNotFoundError:
-                raise RuntimeError("Pandoc not installed. Please install pandoc.")
+                raise RuntimeError(_msg('err_pandoc_missing', locale))
 
             _fix_word_styles(docx_path)
 
@@ -1747,7 +1775,7 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
 
             # Word job done
             if not is_cancelled(word_job_id):
-                update_progress(word_job_id, total_steps, total_steps, 'done', '完成!')
+                update_progress(word_job_id, total_steps, total_steps, 'done', _msg('done', locale))
                 update_job(word_job_id, status='done', result={
                     'total_pages': total_pages,
                     'download_id': download_id,
@@ -1758,9 +1786,9 @@ def process_dual_export_job(md_job_id: str, word_job_id: str, input_path: str, o
         except Exception as e:
             import traceback
             error_msg = str(e)
-            if '已取消' in error_msg:
+            if _is_cancel_error(error_msg):
                 for jid in [md_job_id, word_job_id]:
-                    update_progress(jid, 0, 0, 'cancelled', '已取消')
+                    update_progress(jid, 0, 0, 'cancelled', _msg('cancelled', locale))
                     update_job(jid, status='cancelled')
             else:
                 for jid in [md_job_id, word_job_id]:
@@ -1796,7 +1824,7 @@ def get_progress(task_id):
             with progress_lock:
                 data = progress_data.get(task_id, {
                     'current': 0, 'total': 0, 'percent': 0,
-                    'status': 'waiting', 'message': '等待中...'
+                    'status': 'waiting', 'message': ''
                 })
 
             # Only send if data changed
@@ -1810,7 +1838,7 @@ def get_progress(task_id):
             time.sleep(0.3)
         else:
             # Timeout reached - notify client
-            yield f"data: {json.dumps({'status': 'timeout', 'message': '連線逾時'})}\n\n"
+            yield f"data: {json.dumps({'status': 'timeout', 'message': ''})}\n\n"
 
     return Response(generate(), mimetype='text/event-stream',
                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
@@ -1855,6 +1883,7 @@ def ocr_endpoint():
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
 
+    locale = request.headers.get('X-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -1890,7 +1919,7 @@ def ocr_endpoint():
         # Start background processing
         thread = threading.Thread(
             target=process_ocr_job,
-            args=(job_id, str(upload_path), file.filename)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -1913,6 +1942,7 @@ def markdown_endpoint():
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
 
+    locale = request.headers.get('X-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -1943,7 +1973,7 @@ def markdown_endpoint():
 
         thread = threading.Thread(
             target=process_markdown_job,
-            args=(job_id, str(upload_path), file.filename)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -1966,6 +1996,7 @@ def word_endpoint():
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
 
+    locale = request.headers.get('X-Locale')
     files = request.files.getlist('files')
     job_ids = []
     skipped = []
@@ -1996,7 +2027,7 @@ def word_endpoint():
 
         thread = threading.Thread(
             target=process_word_job,
-            args=(job_id, str(upload_path), file.filename)
+            args=(job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -2019,6 +2050,7 @@ def export_endpoint():
     if 'files' not in request.files:
         return jsonify({'error': 'No files provided'}), 400
 
+    locale = request.headers.get('X-Locale')
     files = request.files.getlist('files')
     job_pairs = []
     skipped = []
@@ -2059,7 +2091,7 @@ def export_endpoint():
 
         thread = threading.Thread(
             target=process_dual_export_job,
-            args=(md_job_id, word_job_id, str(upload_path), file.filename)
+            args=(md_job_id, word_job_id, str(upload_path), file.filename, locale)
         )
         thread.daemon = True
         thread.start()
@@ -2295,7 +2327,8 @@ def cancel_job(job_id):
 
     # Set cancel flag and update progress outside lock
     set_cancelled(job_id, True)
-    update_progress(job_id, 0, 0, 'cancelled', '已取消')
+    locale = request.headers.get('X-Locale')
+    update_progress(job_id, 0, 0, 'cancelled', _msg('cancelled', locale))
 
     return jsonify({'status': 'cancelled', 'job_id': job_id})
 
