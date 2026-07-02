@@ -29,12 +29,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
 
-# Python venv + PaddleOCR 3.7 stack (paddlepaddle-gpu from the cu126 index).
+# PaddlePaddle GPU (cu126) in its own layer — the big 2 GB download stays cached
+# across app-dependency changes.
 RUN python3 -m venv /opt/venv \
  && pip install --no-cache-dir paddlepaddle-gpu==3.3.1 \
       -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
-      --extra-index-url https://pypi.org/simple/ \
- && pip install --no-cache-dir \
+      --extra-index-url https://pypi.org/simple/
+# PaddleOCR 3.7 stack + doc2md (Office→Markdown) + doc utilities.
+RUN pip install --no-cache-dir \
       "paddleocr[doc-parser,doc2md]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
       docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
 
