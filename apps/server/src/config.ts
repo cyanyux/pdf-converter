@@ -42,3 +42,8 @@ export const config = {
 export function isExposedBind(host: string): boolean {
   return host !== "127.0.0.1" && host !== "localhost" && host !== "::1";
 }
+
+/** Digital Office formats convertible to Markdown (PaddleOCR doc2md). */
+export const OFFICE_EXTS = [".docx", ".xlsx", ".pptx"] as const;
+/** Everything the upload endpoint accepts. */
+export const ACCEPTED_EXTS: readonly string[] = [".pdf", ...OFFICE_EXTS];

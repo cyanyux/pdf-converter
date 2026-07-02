@@ -13,6 +13,8 @@ Everything runs on your own hardware — no data leaves your network.
 - **Three outputs from one upload** — searchable PDF (invisible, selectable text layer),
   Markdown (with extracted images/tables), and editable Word. Markdown + Word are produced
   from a single vision-language pass.
+- **Office → Markdown** — convert digital Word / Excel / PowerPoint (`.docx`/`.xlsx`/`.pptx`)
+  straight to Markdown (PaddleOCR doc2md; CPU, no GPU needed).
 - **GPU-accelerated** — CUDA via PaddlePaddle; a dedicated worker owns the GPU and swaps
   models by tearing children down so VRAM is reclaimed cleanly (fits a 12 GB card).
 - **Agent-friendly** — documented REST API (`/openapi.json`, Swagger UI at `/docs`) and an

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { rm, unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { HttpBindings } from "@hono/node-server";
 import {
@@ -17,10 +17,10 @@ import { streamSSE } from "hono/streaming";
 import { rateLimiter } from "hono-rate-limiter";
 import { z } from "zod";
 import { apiKeyAuth } from "./auth.ts";
-import { config } from "./config.ts";
+import { config, OFFICE_EXTS } from "./config.ts";
 import type { JobStore } from "./db.ts";
 import { buildOpenApiDoc, SWAGGER_HTML } from "./openapi.ts";
-import { preflightPdf } from "./preflight.ts";
+import { preflightOffice, preflightPdf } from "./preflight.ts";
 import { safeResolve, sanitizeDownloadName } from "./safe-resolve.ts";
 import type { ProgressHub } from "./sse.ts";
 import type { UploadedFile } from "./upload.ts";
@@ -144,30 +144,53 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
         skipped.push({ filename: f.filename, reason: "too_large" });
         continue;
       }
-      if (!f.filename.toLowerCase().endsWith(".pdf")) {
-        await unlink(f.path).catch(() => {});
-        skipped.push({ filename: f.filename, reason: "not_pdf" });
-        continue;
-      }
-      const pf = await preflightPdf(f.path);
-      if (!pf.ok) {
-        await unlink(f.path).catch(() => {});
-        skipped.push({ filename: f.filename, reason: pf.reason ?? "invalid_pdf" });
-        continue;
-      }
-      // markdown + word from one upload share a group so the worker runs VL once.
-      const dual = modes.includes("markdown") && modes.includes("word");
-      const groupId = dual ? randomUUID() : null;
-      for (const mode of modes) {
-        const gid = mode === "markdown" || mode === "word" ? groupId : null;
+      const ext = extname(f.filename).toLowerCase();
+
+      if (ext === ".pdf") {
+        const pf = await preflightPdf(f.path);
+        if (!pf.ok) {
+          await unlink(f.path).catch(() => {});
+          skipped.push({ filename: f.filename, reason: pf.reason ?? "invalid_pdf" });
+          continue;
+        }
+        // markdown + word from one upload share a group so the worker runs VL once.
+        const dual = modes.includes("markdown") && modes.includes("word");
+        const groupId = dual ? randomUUID() : null;
+        for (const mode of modes) {
+          const gid = mode === "markdown" || mode === "word" ? groupId : null;
+          const id = store.enqueue({
+            mode,
+            filename: f.filename,
+            locale,
+            uploadPath: f.path,
+            groupId: gid,
+          });
+          created.push({ id, filename: f.filename, mode, groupId: gid });
+        }
+      } else if (OFFICE_EXTS.includes(ext as (typeof OFFICE_EXTS)[number])) {
+        // Office documents (docx/xlsx/pptx) convert to Markdown only.
+        const pf = await preflightOffice(f.path);
+        if (!pf.ok) {
+          await unlink(f.path).catch(() => {});
+          skipped.push({ filename: f.filename, reason: pf.reason ?? "invalid_office" });
+          continue;
+        }
+        if (!modes.includes("markdown")) {
+          await unlink(f.path).catch(() => {});
+          skipped.push({ filename: f.filename, reason: "office_needs_markdown" });
+          continue;
+        }
         const id = store.enqueue({
-          mode,
+          mode: "markdown",
           filename: f.filename,
           locale,
           uploadPath: f.path,
-          groupId: gid,
+          groupId: null,
         });
-        created.push({ id, filename: f.filename, mode, groupId: gid });
+        created.push({ id, filename: f.filename, mode: "markdown", groupId: null });
+      } else {
+        await unlink(f.path).catch(() => {});
+        skipped.push({ filename: f.filename, reason: "unsupported" });
       }
     }
 

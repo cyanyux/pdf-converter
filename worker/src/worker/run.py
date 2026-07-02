@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import config, models
+from . import config, models, office
 from .store import Store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] worker: %(message)s")
@@ -148,6 +148,18 @@ def main() -> None:
             job = store.claim()
             if job is None:
                 time.sleep(config.POLL_S)
+                continue
+
+            # Office documents convert on CPU without a GPU model child.
+            if office.is_office(job["upload_path"] or ""):
+                log.info("claimed %s (office -> markdown)", job["id"])
+                try:
+                    office.process(store, job)
+                    cleanup_upload(store, job)
+                    log.info("job %s -> DONE (office)", job["id"])
+                except Exception as e:
+                    store.set_error(job["id"], str(e))
+                    log.exception("office job %s failed", job["id"])
                 continue
 
             family = FAMILY_BY_MODE.get(job["mode"], "vl")

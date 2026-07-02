@@ -51,8 +51,8 @@ export function App() {
       const seen = new Set(prev.map(fileKey));
       const next = [...prev];
       for (const f of Array.from(list)) {
-        const isPdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
-        if (isPdf && !seen.has(fileKey(f))) {
+        const isSupported = /\.(pdf|docx|xlsx|pptx)$/i.test(f.name) || f.type === "application/pdf";
+        if (isSupported && !seen.has(fileKey(f))) {
           seen.add(fileKey(f));
           next.push(f);
         }
@@ -145,7 +145,7 @@ export function App() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf"
+          accept=".pdf,.docx,.xlsx,.pptx"
           multiple
           hidden
           onChange={(e) => addFiles(e.target.files)}

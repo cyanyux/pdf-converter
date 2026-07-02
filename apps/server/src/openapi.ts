@@ -19,7 +19,7 @@ export function buildOpenApiDoc(): Record<string, unknown> {
       title: "PDF OCR API",
       version: "1.0.0",
       description:
-        "Self-hosted GPU OCR. Upload PDFs and convert to searchable PDF, Markdown, or Word " +
+        "Self-hosted GPU OCR. Upload PDFs (or Office docx/xlsx/pptx) and convert to searchable PDF, Markdown, or Word " +
         "(PaddleOCR 3.7 / PaddleOCR-VL). Jobs are async: submit, then poll GET /jobs/{id} " +
         "(or stream GET /jobs/{id}/events) until status is 'done', then GET /download/{id}.",
     },
@@ -57,9 +57,10 @@ export function buildOpenApiDoc(): Record<string, unknown> {
         post: {
           summary: "Submit PDF(s) for conversion",
           description:
-            "multipart/form-data: one or more `files` (PDF), repeated `modes` " +
-            "(pdf|markdown|word), and `locale` (zh-TW|zh-CN|en). markdown+word together " +
-            "share one VL pass. Returns created job ids.",
+            "multipart/form-data: one or more `files` (PDF, or Office docx/xlsx/pptx), " +
+            "repeated `modes` (pdf|markdown|word), and `locale` (zh-TW|zh-CN|en). " +
+            "markdown+word share one VL pass; Office files convert to Markdown only. " +
+            "Returns created job ids.",
           requestBody: {
             required: true,
             content: {

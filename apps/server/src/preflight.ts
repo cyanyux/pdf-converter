@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import { PDFDocument } from "pdf-lib";
 
 export type PreflightReason =
@@ -6,6 +6,8 @@ export type PreflightReason =
   | "empty_pdf"
   | "encrypted_pdf"
   | "invalid_pdf"
+  | "invalid_office"
+  | "office_needs_markdown"
   | "truncated";
 
 export interface PreflightResult {
@@ -38,5 +40,25 @@ export async function preflightPdf(path: string): Promise<PreflightResult> {
     const msg = String(e instanceof Error ? e.message : e).toLowerCase();
     if (msg.includes("encrypt")) return { ok: false, reason: "encrypted_pdf" };
     return { ok: false, reason: "invalid_pdf" };
+  }
+}
+
+/**
+ * Validate an Office upload (docx/xlsx/pptx) by its ZIP container magic (PK\x03\x04),
+ * reading only the first bytes rather than the whole file.
+ */
+export async function preflightOffice(path: string): Promise<PreflightResult> {
+  let fh;
+  try {
+    fh = await open(path);
+  } catch {
+    return { ok: false, reason: "invalid_office" };
+  }
+  try {
+    const { bytesRead, buffer } = await fh.read(Buffer.alloc(4), 0, 4, 0);
+    if (bytesRead >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b) return { ok: true };
+    return { ok: false, reason: "invalid_office" };
+  } finally {
+    await fh.close();
   }
 }

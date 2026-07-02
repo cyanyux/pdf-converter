@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import type { HttpBindings } from "@hono/node-server";
 import busboy from "busboy";
 import type { Context } from "hono";
-import { config } from "./config.ts";
+import { ACCEPTED_EXTS, config } from "./config.ts";
 
 export interface UploadedFile {
   /** absolute path on the uploads volume */
@@ -51,7 +51,10 @@ export async function parseMultipart(
     });
 
     bb.on("file", (_name, stream, info) => {
-      const path = join(config.uploadsDir, `${randomUUID()}.pdf`);
+      // Preserve the real extension so the worker can route by file type.
+      const ext = extname(info.filename || "").toLowerCase();
+      const safeExt = ACCEPTED_EXTS.includes(ext) ? ext : ".bin";
+      const path = join(config.uploadsDir, `${randomUUID()}${safeExt}`);
       let truncated = false;
       stream.on("limit", () => {
         truncated = true;

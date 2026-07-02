@@ -35,7 +35,7 @@ RUN python3 -m venv /opt/venv \
       -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
       --extra-index-url https://pypi.org/simple/ \
  && pip install --no-cache-dir \
-      "paddleocr[doc-parser]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
+      "paddleocr[doc-parser,doc2md]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
       docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
 
 WORKDIR /app
