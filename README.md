@@ -1,29 +1,32 @@
 # PDF OCR
 
-Self-hosted, GPU-accelerated OCR web app that converts scanned or image-based PDFs into searchable, editable documents.
+Self-hosted, GPU-accelerated OCR web app that converts scanned or image-based PDFs into
+**searchable PDF**, **Markdown**, or **Word (.docx)** — with a clean web UI and a first-class
+API/MCP surface for AI agents.
 
-Upload a PDF and get back:
-
-- **Searchable PDF** — original layout preserved with an invisible, selectable text layer
-- **Markdown** — structured plain text with tables and images extracted
-- **Word (.docx)** — editable document ready for further editing
-
-Built with [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) and PaddleOCR-VL for high-accuracy Chinese and multilingual document recognition. Runs entirely on your own hardware — no data leaves your network.
+Built on **PaddleOCR 3.7** (PP-OCRv6 for the searchable-PDF text layer, PaddleOCR-VL for
+document parsing) with strong Traditional/Simplified Chinese and multilingual accuracy.
+Everything runs on your own hardware — no data leaves your network.
 
 ## Features
 
-- **GPU-accelerated** — CUDA-powered OCR and vision-language model inference via PaddlePaddle
-- **Multiple output formats** — searchable PDF, Markdown (with images), and Word from a single upload
-- **Batch processing** — upload multiple PDFs at once; jobs run in the background
-- **Multilingual UI** — Traditional Chinese (繁體中文), Simplified Chinese (简体中文), and English
-- **Smart Chinese text handling** — automatic Simplified-to-Traditional conversion for Traditional Chinese users; Simplified Chinese users get native output
-- **Real-time progress** — live progress bar and status updates per page
-- **Self-hosted & private** — everything runs locally in Docker; your documents never leave your server
-- **Single-container deployment** — one `docker compose up` and you're running
+- **Three outputs from one upload** — searchable PDF (invisible, selectable text layer),
+  Markdown (with extracted images/tables), and editable Word. Markdown + Word are produced
+  from a single vision-language pass.
+- **GPU-accelerated** — CUDA via PaddlePaddle; a dedicated worker owns the GPU and swaps
+  models by tearing children down so VRAM is reclaimed cleanly (fits a 12 GB card).
+- **Agent-friendly** — documented REST API (`/openapi.json`, Swagger UI at `/docs`) and an
+  **MCP server** so tools like Claude can submit and fetch conversions directly.
+- **Reliable by design** — durable SQLite job queue (jobs survive restarts), crash-recovery
+  reaper, per-page cancellation, streamed uploads, retention GC.
+- **Multilingual UI** — Traditional Chinese, Simplified Chinese, English; automatic
+  Simplified→Traditional correction for zh-TW users.
+- **Single-container deploy** — one `docker compose up`.
 
-## Quick Start
+## Quick start
 
-**Prerequisites:** NVIDIA GPU, Docker, [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+**Prerequisites:** NVIDIA GPU + driver, Docker, and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
 
 ```bash
 git clone https://github.com/cyanyux/pdf-ocr.git
@@ -31,69 +34,83 @@ cd pdf-ocr
 docker compose up -d --build
 ```
 
-Open **http://localhost:5000** in your browser and start uploading PDFs.
+Open **http://localhost:5000** and start uploading PDFs.
 
-> First launch takes a few minutes to download model weights (~2 GB). Subsequent starts are instant.
+> First launch downloads model weights (~2 GB) on the first conversion; they're cached in a
+> volume, so subsequent runs are fast.
+
+## Architecture
+
+```
+Browser / AI agent ──HTTP+SSE / MCP──▶ TypeScript server (Hono, Node)
+                                        · REST API + SSE + static SPA + MCP + auth
+                                        │  enqueue / read
+                                        ▼
+                              SQLite (WAL) job queue  ◀──▶  shared files
+                                        ▲  claim / write
+                                        │
+                              Python GPU worker (PaddleOCR 3.7)
+                                · one model child at a time (VRAM-safe)
+                                · PP-OCRv6 · PaddleOCR-VL · PyMuPDF · pandoc
+```
+
+The whole human/agent-facing surface is **TypeScript** (managed by [Vite+](https://viteplus.dev));
+Python is reduced to a headless GPU worker. The SQLite schema (`db/schema.sql`) is the
+language-agnostic contract between them.
 
 ## Configuration
 
-All settings are optional environment variables (set in `docker-compose.yml`):
+Environment variables (set in `docker-compose.yml`); all optional.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PDF_OCR_DEVICE` | `auto` | Force `cpu` to disable GPU |
-| `PDF_OCR_CUDA_VISIBLE_DEVICES` | — | Select specific GPU (e.g. `0`) |
-| `PDF_OCR_MAX_UPLOAD_MB` | `500` | Max upload size per file (MB) |
-| `PDF_OCR_MODEL_IDLE_TIMEOUT` | `1800` | Seconds before unloading idle models from VRAM |
-| `PDF_OCR_CLEANUP_INTERVAL` | `3600` | Output file cleanup interval (seconds) |
-| `PDF_OCR_MAX_FILE_AGE` | `3600` | Delete output files older than this (seconds) |
-| `PDF_OCR_DISABLE_HPI` | `false` | Disable HPI/ONNX GPU acceleration |
-| `SECRET_KEY` | auto-generated | Flask secret key for CSRF |
+| `API_KEY` | — | If set, require it (`Authorization: Bearer` / `X-API-Key`) on the API + MCP |
+| `PDF_OCR_DEVICE` | `gpu:0` | `cpu` to disable GPU |
+| `PDF_OCR_OCR_VERSION` | `PP-OCRv6` | Searchable-PDF OCR model (`PP-OCRv5` for continuity) |
+| `PDF_OCR_DOCX_BACKEND` | `native` | `native` (save_to_word) or `pandoc` |
+| `PDF_OCR_MAX_UPLOAD_MB` | `500` | Max upload size per file |
+| `PDF_OCR_MAX_QUEUE` | `100` | Reject new jobs above this queue depth (429) |
+| `PDF_OCR_JOB_MAX_AGE` | `7200` | Retention (seconds) for outputs and job rows |
+| `PDF_OCR_ENABLE_HPI` | `1` | Install/use HPI (ONNX Runtime/OpenVINO) acceleration on first boot |
 
-## API
+## API & agents
 
-All endpoints accept multipart file uploads and return JSON with job IDs for async polling.
+- **OpenAPI:** `GET /openapi.json`, Swagger UI at `/docs`.
+- **MCP (stdio):** `node apps/server/dist/mcp-stdio.mjs` (env `PDF_OCR_URL`, `API_KEY`).
+  Tools: `submit_pdf`, `get_job`, `wait_for_job`, `get_markdown`, `download_result`, `cancel_job`.
+- **REST flow:** `POST /api/v1/jobs` (multipart `files`, `modes`, `locale`) → poll
+  `GET /api/v1/jobs/{id}` (or SSE `…/events`) → `GET /api/v1/download/{id}`.
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/ocr` | Convert PDF to searchable PDF |
-| `POST` | `/api/markdown` | Convert PDF to Markdown (zip with images) |
-| `POST` | `/api/word` | Convert PDF to Word (.docx) |
-| `POST` | `/api/export` | Markdown + Word from single VL pass |
-| `GET` | `/api/job/<id>` | Poll job status and progress |
-| `POST` | `/api/cancel/<id>` | Cancel a running job |
-| `GET` | `/api/download/...` | Download completed output |
-| `GET` | `/api/health` | Health check (device, GPU status) |
+See [AGENTS.md](AGENTS.md) for details.
 
-## Tech Stack
+## Development
 
-- **OCR Engine:** [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) 3.4 + PaddleOCR-VL-1.5
-- **GPU Framework:** [PaddlePaddle](https://github.com/PaddlePaddle/Paddle) 3.2 with CUDA 12.6
-- **Backend:** Python / Flask / Gunicorn
-- **Frontend:** Vanilla JS single-page app
-- **Container:** NVIDIA CUDA 12.6.3 + cuDNN on Ubuntu 24.04
-- **Document conversion:** Pandoc, PyMuPDF, python-docx
+Uses **Vite+** (`vp`) for the TypeScript workspace and a `uv`/venv for the Python worker.
 
-## Troubleshooting
-
-**Check service health:**
 ```bash
-curl http://localhost:5000/api/health
+vp install            # install JS deps (pnpm, managed by vp)
+vp dev                # SPA dev server + Hono API
+vp check              # format + lint + type-check (TS7 native)
+vp test               # Vitest
+
+# Python worker
+cd worker && uv venv --python 3.12 .venv
+uv pip install --python .venv -e ".[dev]"
+PYTHONPATH=src .venv/bin/pytest        # unit tests (no GPU)
 ```
 
-**Verify GPU access inside container:**
-```bash
-docker exec pdf-ocr nvidia-smi
-```
+## Tech stack
 
-**GPU not detected?**
-1. Ensure [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) is installed
-2. Restart Docker after driver updates: `sudo systemctl restart docker`
-3. Rebuild: `docker compose down && docker compose up -d --build`
+- **OCR:** PaddleOCR 3.7 (PP-OCRv6 + PaddleOCR-VL) · PaddlePaddle 3.3 / CUDA 12.6
+- **Frontend:** React 19 + TypeScript on Vite+ (Rolldown / Oxlint / Oxfmt / Vitest)
+- **API/MCP:** Hono on Node · `@modelcontextprotocol/sdk` · SQLite (`node:sqlite`)
+- **Worker:** Python 3.12 · PyMuPDF · python-docx / docxcompose · pandoc
+- **Container:** NVIDIA CUDA 12.6 + cuDNN, single service via supervisord
 
 ## Security
 
-This service has **no built-in authentication**. Do not expose it directly to the internet. Use a reverse proxy (Nginx, Caddy, Traefik) with access control for production deployments.
+No authentication by default. Set `API_KEY` and/or place the service behind a reverse proxy
+with access control before exposing it to a network.
 
 ## License
 
