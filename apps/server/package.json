@@ -15,14 +15,15 @@
     "@hono/zod-openapi": "1.4.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@pdf-ocr/shared": "workspace:*",
-    "archiver": "8.0.0",
+    "busboy": "^1.6.0",
+    "fflate": "^0.8.2",
     "hono": "4.12.27",
     "hono-rate-limiter": "0.5.3",
     "pdf-lib": "^1.17.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
-    "@types/archiver": "^6.0.3",
+    "@types/busboy": "^1.5.4",
     "@types/node": "catalog:",
     "@typescript/native-preview": "catalog:",
     "typescript": "catalog:",
