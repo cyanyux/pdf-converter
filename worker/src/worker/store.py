@@ -68,7 +68,10 @@ class Store:
                 (now, now, row["id"]),
             )
             self.conn.execute("COMMIT")
-            return dict(row)
+            claimed = dict(row)
+            claimed["status"] = "processing"
+            claimed["heartbeat_at"] = now
+            return claimed
         except Exception:
             self.conn.execute("ROLLBACK")
             raise

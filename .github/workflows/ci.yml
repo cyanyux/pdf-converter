@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install -g pnpm@11.9.0
+      - run: pnpm install
+      - name: Format + lint + type-check (Vite+)
+        run: pnpm check
+      - name: Tests (Vitest)
+        run: pnpm test
+
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv venv --python 3.12 worker/.venv
+      # Worker unit tests are GPU-free: no paddle / pymupdf needed.
+      - name: Install worker test deps
+        run: uv pip install --python worker/.venv ruff==0.15.20 pytest==9.1.1 beautifulsoup4==4.15.0
+      - name: Lint + format check
+        run: |
+          worker/.venv/bin/ruff check worker/src worker/tests
+          worker/.venv/bin/ruff format --check worker/src worker/tests
+      - name: pytest (unit; no GPU)
+        run: cd worker && PYTHONPATH=src .venv/bin/pytest

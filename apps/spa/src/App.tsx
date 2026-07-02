@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import { JobCard } from "./components/JobCard.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { fetchPreview, triggerDownload } from "./lib/api.ts";
+import { fileKey, formatSize } from "./lib/format.ts";
 import { useI18n } from "./lib/i18n.tsx";
 import { type ToastKind, useJobStore } from "./lib/jobs.ts";
 import { useToast } from "./lib/toast.tsx";
@@ -18,16 +19,6 @@ const FORMATS: { mode: Mode; titleKey: string; descKey: string; cls: string }[] 
   { mode: "markdown", titleKey: "fmt_md", descKey: "fmt_md_desc", cls: "md" },
   { mode: "word", titleKey: "fmt_word", descKey: "fmt_word_desc", cls: "word" },
 ];
-
-function fileKey(f: File): string {
-  return `${f.name}|${f.size}|${f.lastModified}`;
-}
-
-function formatSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function App() {
   const { t, locale, setLocale } = useI18n();
