@@ -5,7 +5,7 @@ import { defineConfig } from "vite-plus";
 // deps are externalized by tsdown; the runtime image ships production deps.
 export default defineConfig({
   pack: {
-    entry: ["src/index.ts"],
+    entry: ["src/index.ts", "src/mcp-stdio.ts"],
     format: ["esm"],
     dts: false,
     sourcemap: true,

@@ -19,6 +19,7 @@ import { z } from "zod";
 import { apiKeyAuth } from "./auth.ts";
 import { config } from "./config.ts";
 import type { JobStore } from "./db.ts";
+import { buildOpenApiDoc, SWAGGER_HTML } from "./openapi.ts";
 import { preflightPdf } from "./preflight.ts";
 import { safeResolve, sanitizeDownloadName } from "./safe-resolve.ts";
 import type { ProgressHub } from "./sse.ts";
@@ -68,6 +69,9 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
     };
     return c.json(body);
   });
+
+  app.get("/openapi.json", (c) => c.json(buildOpenApiDoc()));
+  app.get("/docs", (c) => c.html(SWAGGER_HTML));
 
   app.get("/api/v1/jobs", (c) => c.json({ jobs: store.list() }));
 

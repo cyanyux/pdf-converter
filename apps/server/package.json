@@ -7,6 +7,7 @@
     "dev": "node --watch --enable-source-maps src/index.ts",
     "build": "vp pack",
     "start": "node dist/index.mjs",
+    "mcp": "node src/mcp-stdio.ts",
     "test": "vp test",
     "check": "vp check"
   },
