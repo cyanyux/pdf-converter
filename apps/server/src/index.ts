@@ -4,12 +4,12 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import type { HttpBindings } from "@hono/node-server";
 import { Hono } from "hono";
 import { createApp } from "./app.ts";
-import { assertSafeBind } from "./auth.ts";
+import { warnIfInsecureBind } from "./auth.ts";
 import { config } from "./config.ts";
 import { JobStore } from "./db.ts";
 import { ProgressHub } from "./sse.ts";
 
-assertSafeBind();
+warnIfInsecureBind();
 for (const dir of [config.uploadsDir, config.outputsDir]) {
   mkdirSync(dir, { recursive: true });
 }

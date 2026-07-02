@@ -5,16 +5,19 @@ services:
     runtime: nvidia
     init: true
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 90s
     ports:
       - "5000:5000"
     volumes:
-      - pdf-ocr-output:/tmp/pdf_ocr_output
-      - pdf-ocr-paddlex:/root/.paddlex
+      - pdf-ocr-data:/app/data # jobs db + uploads + outputs
+      - pdf-ocr-paddlex:/root/.paddlex # model weights cache
       - pdf-ocr-cache:/root/.cache
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Recommended when exposed: require an API key on the REST API + MCP.
+      # API_KEY: "change-me"
+      # PDF_OCR_DEVICE: gpu:0   # or "cpu"
     networks:
       - app-net
     deploy:
@@ -26,7 +29,7 @@ services:
               capabilities: [gpu]
 
 volumes:
-  pdf-ocr-output:
+  pdf-ocr-data:
   pdf-ocr-paddlex:
   pdf-ocr-cache:
 

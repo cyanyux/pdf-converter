@@ -28,14 +28,16 @@ export function apiKeyAuth(): MiddlewareHandler {
 }
 
 /**
- * Fail fast if the server would expose a non-localhost interface without a key.
- * Reconciles "auth off by default" with the tunnel-exposure risk.
+ * Warn loudly if the server exposes a non-localhost interface without a key.
+ * (Containers bind 0.0.0.0 by design, so this warns rather than refuses; put the
+ * service behind a reverse proxy / access control, or set API_KEY.)
  */
-export function assertSafeBind(): void {
+export function warnIfInsecureBind(): void {
   if (isExposedBind(config.host) && !config.apiKey) {
-    throw new Error(
-      `Refusing to bind ${config.host} without API_KEY set. ` +
-        "Set API_KEY to expose the service, or keep HOST=127.0.0.1 behind a reverse proxy.",
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[server] WARNING: bound to ${config.host} without API_KEY — the API is unauthenticated. ` +
+        "Set API_KEY or restrict access via a reverse proxy / network policy.",
     );
   }
 }

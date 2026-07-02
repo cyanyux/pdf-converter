@@ -9,7 +9,7 @@
     "check": "vp check",
     "test": "vp run -r test",
     "ready": "vp check && vp run -r test && vp run -r build",
-    "prepare": "vp config"
+    "prepare": "vp config || true"
   },
   "devDependencies": {
     "vite-plus": "catalog:"

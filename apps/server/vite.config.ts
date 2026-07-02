@@ -9,6 +9,9 @@ export default defineConfig({
     format: ["esm"],
     dts: false,
     sourcemap: true,
+    // Bundle npm deps into the output so the runtime image needs only Node +
+    // dist/*.mjs (node: builtins stay external).
+    noExternal: [/^(?!node:).*/],
   },
   fmt: {},
   lint: {
