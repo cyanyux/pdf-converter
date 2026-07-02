@@ -69,11 +69,12 @@ Environment variables (set in `docker-compose.yml`); all optional.
 | `API_KEY` | — | If set, require it (`Authorization: Bearer` / `X-API-Key`) on the API + MCP |
 | `PDF_OCR_DEVICE` | `gpu:0` | `cpu` to disable GPU |
 | `PDF_OCR_OCR_VERSION` | `PP-OCRv6` | Searchable-PDF OCR model (`PP-OCRv5` for continuity) |
+| `PDF_OCR_ENGINE` | `onnxruntime` | PP-OCR GPU backend: `onnxruntime` (~1.14× faster than `paddle` on PP-OCRv6, identical output; auto-falls back to `paddle` if unavailable) |
 | `PDF_OCR_DOCX_BACKEND` | `native` | `native` (save_to_word) or `pandoc` |
 | `PDF_OCR_MAX_UPLOAD_MB` | `500` | Max upload size per file |
 | `PDF_OCR_MAX_QUEUE` | `100` | Reject new jobs above this queue depth (429) |
 | `PDF_OCR_JOB_MAX_AGE` | `7200` | Retention (seconds) for outputs and job rows |
-| `PDF_OCR_ENABLE_HPI` | `1` | Install/use HPI (ONNX Runtime/OpenVINO) acceleration on first boot |
+| `PDF_OCR_ENABLE_HPI` | `0` | Install/use HPI on first boot for the `paddle` engine — only helps older models (e.g. PP-OCRv5); no effect on PP-OCRv6 |
 
 ## API & agents
 

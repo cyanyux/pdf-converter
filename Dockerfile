@@ -39,6 +39,11 @@ RUN python3 -m venv /opt/venv \
 RUN pip install --no-cache-dir \
       "paddleocr[doc-parser,doc2md]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
       docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
+# ONNX Runtime engine for PP-OCR (paddle2onnx export + onnxruntime-gpu): ~1.14x faster than
+# native Paddle on PP-OCRv6, identical output. Separate layer so the big paddle layers stay
+# cached. Selected via PDF_OCR_ENGINE=onnxruntime (default); auto-falls back to Paddle.
+# Pinned to the 1.23 line: it targets CUDA 12.x (matches the base image); 1.24+ links CUDA 13.
+RUN pip install --no-cache-dir onnxruntime-gpu==1.23.0 paddle2onnx==2.0.2rc3
 
 WORKDIR /app
 COPY db ./db

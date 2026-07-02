@@ -58,7 +58,16 @@ def gpu_info(active_model: str | None) -> dict[str, Any]:
 
 
 def build_ocr() -> Any:
-    """PP-OCRv6 (default) for searchable-PDF OCR. HPI (ONNX Runtime/OpenVINO) on GPU."""
+    """PP-OCRv6 (default) for searchable-PDF OCR.
+
+    GPU engine selection (config.OCR_ENGINE):
+      - 'onnxruntime': paddle2onnx + ONNX Runtime. ~1.14x faster than Paddle on PP-OCRv6
+        (measured on an RTX 3060), with identical recognized text. Falls back to Paddle
+        if onnxruntime-gpu / paddle2onnx are unavailable.
+      - 'paddle': native Paddle Inference; honours config.ENABLE_HPI (HPI auto-selects a
+        backend, but resolves to Paddle for PP-OCRv6 — it only helps older models such as
+        PP-OCRv5_server).
+    """
     from paddleocr import PaddleOCR
 
     on_gpu = config.DEVICE != "cpu" and paddle.is_compiled_with_cuda()
@@ -73,17 +82,26 @@ def build_ocr() -> Any:
         "text_det_box_thresh": 0.5,
         "device": config.DEVICE,
     }
+
+    # Preferred: direct ONNX Runtime engine (the only backend that speeds up PP-OCRv6).
+    if on_gpu and config.OCR_ENGINE == "onnxruntime":
+        try:
+            log.info("building PaddleOCR (%s, engine=onnxruntime)", config.OCR_VERSION)
+            return PaddleOCR(engine="onnxruntime", **kwargs)
+        except Exception as e:
+            # Needs onnxruntime-gpu + paddle2onnx; fall through to Paddle if missing.
+            log.warning("ONNX Runtime engine unavailable (%s); falling back to Paddle", e)
+
+    # Optional HPI on the Paddle path (helps PP-OCRv5, not v6).
     if on_gpu and config.ENABLE_HPI:
-        kwargs["enable_hpi"] = True
-    log.info("building PaddleOCR (%s, hpi=%s)", config.OCR_VERSION, kwargs.get("enable_hpi", False))
-    try:
-        return PaddleOCR(**kwargs)
-    except Exception as e:
-        # HPI needs the optional ultra-infer package; fall back to plain inference.
-        if kwargs.pop("enable_hpi", None):
+        try:
+            log.info("building PaddleOCR (%s, hpi=True)", config.OCR_VERSION)
+            return PaddleOCR(enable_hpi=True, **kwargs)
+        except Exception as e:
             log.warning("HPI unavailable (%s); rebuilding OCR without it", e)
-            return PaddleOCR(**kwargs)
-        raise
+
+    log.info("building PaddleOCR (%s, engine=paddle)", config.OCR_VERSION)
+    return PaddleOCR(**kwargs)
 
 
 def build_vl() -> Any:

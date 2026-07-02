@@ -13,10 +13,12 @@ else
   echo "WARNING: no usable GPU. Set PDF_OCR_DEVICE=cpu to run on CPU (much slower)."
 fi
 
-# --- Optional HPI acceleration (ONNX Runtime / OpenVINO) — one-time, needs GPU ---
-# The worker falls back to plain inference automatically if this is absent.
+# --- Optional HPI deps (ultra-infer) — one-time, needs GPU, off by default ---
+# The default engine is ONNX Runtime (PDF_OCR_ENGINE=onnxruntime), which does NOT need
+# HPI. HPI only helps the 'paddle' engine on older models (e.g. PP-OCRv5_server); enable
+# it with PDF_OCR_ENABLE_HPI=1. The worker falls back to plain inference if it's absent.
 HPI_MARKER=/root/.paddlex/hpi_installed
-if [ "$GPU_OK" = "1" ] && [ "${PDF_OCR_ENABLE_HPI:-1}" = "1" ] && [ ! -f "$HPI_MARKER" ]; then
+if [ "$GPU_OK" = "1" ] && [ "${PDF_OCR_ENABLE_HPI:-0}" = "1" ] && [ ! -f "$HPI_MARKER" ]; then
   echo "Installing High-Performance Inference deps (one-time)..."
   if /opt/venv/bin/paddleocr install_hpi_deps gpu >/dev/null 2>&1; then
     touch "$HPI_MARKER"

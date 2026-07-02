@@ -27,7 +27,16 @@ OUTPUTS_DIR = Path(os.environ.get("PDF_OCR_OUTPUTS", str(ROOT / "data/outputs"))
 
 # 'cpu' | 'gpu' | 'gpu:0'
 DEVICE = os.environ.get("PDF_OCR_DEVICE", "gpu:0")
-ENABLE_HPI = _bool("PDF_OCR_ENABLE_HPI", True)
+# PP-OCR inference engine on GPU: 'onnxruntime' (paddle2onnx + ONNX Runtime — measured
+# ~1.14x faster than Paddle on PP-OCRv6, identical output) or 'paddle' (native Paddle
+# Inference). build_ocr() auto-falls back to Paddle if onnxruntime-gpu/paddle2onnx are
+# unavailable. TensorRT is intentionally not offered: PP-OCRv6's detection graph does not
+# convert (Int32/Int64 concat), so it yields ~1.01x — no gain.
+OCR_ENGINE = os.environ.get("PDF_OCR_ENGINE", "onnxruntime").strip().lower()
+# HPI (High-Performance Inference) auto-selects a backend for the 'paddle' engine. Off by
+# default: for PP-OCRv6 it resolves to the Paddle backend anyway (no speedup); it only
+# helps older models such as PP-OCRv5_server. Needs `paddleocr install_hpi_deps gpu`.
+ENABLE_HPI = _bool("PDF_OCR_ENABLE_HPI", False)
 # Searchable-PDF OCR engine: PP-OCRv6 is the 3.7 default; pin PP-OCRv5 for continuity.
 OCR_VERSION = os.environ.get("PDF_OCR_OCR_VERSION", "PP-OCRv6")
 OCR_BATCH_SIZE = _int("PDF_OCR_BATCH", 4)
