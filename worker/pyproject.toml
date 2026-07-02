@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdf-ocr-worker"
+version = "0.0.0"
+description = "Headless GPU inference worker for pdf-ocr (PaddleOCR 3.7)."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  # NOTE: paddlepaddle-gpu is installed separately from the cu126 index in the
+  # Dockerfile (it is not on PyPI): paddlepaddle-gpu==3.3.1 -i .../stable/cu126/
+  "paddleocr==3.7.0",
+  "pymupdf==1.28.0",
+  "python-docx==1.2.0",
+  "docxcompose",
+  "beautifulsoup4==4.15.0",
+  "numpy==2.3.5",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.20",
+  "mypy==2.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worker"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = ["gpu: requires a CUDA GPU (opt-in, not run in CI)"]

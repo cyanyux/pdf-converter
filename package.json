@@ -1,0 +1,27 @@
+{
+  "name": "pdf-ocr",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp run --parallel spa#dev server#dev",
+    "build": "vp run -r build",
+    "check": "vp check",
+    "test": "vp run -r test",
+    "ready": "vp check && vp run -r test && vp run -r build",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "11.9.0",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=24.18.0"
+  }
+}

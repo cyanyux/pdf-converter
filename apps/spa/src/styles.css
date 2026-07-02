@@ -1,0 +1,21 @@
+:root {
+  color-scheme: light;
+  --paper: #faf8f5;
+  --ink: #2c2825;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+
+.app {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem;
+}
