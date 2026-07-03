@@ -3,6 +3,18 @@
 from __future__ import annotations
 
 import os
+
+# Force EAGER CUDA module loading before paddle initializes CUDA. The CUDA 12 default
+# (CUDA_MODULE_LOADING=LAZY) loads each GPU kernel's module on its first launch via
+# cuLibraryGetModule; in the PaddleOCR-VL pipeline the VLM runs in a background worker
+# thread, and that first lazy load deadlocks the thread at 0% GPU on some driver builds
+# (reproduced on 595.71.05) — a document parse then hangs forever with no recovery. EAGER
+# front-loads all kernel modules at CUDA-context init on the main thread, before the
+# pipeline spawns its worker thread, which avoids the deadlock (dense page: hang -> ~8s).
+# Set here because `config` is imported before `worker.models` (which imports paddle);
+# setdefault keeps any explicit override the operator sets.
+os.environ.setdefault("CUDA_MODULE_LOADING", "EAGER")
+
 from pathlib import Path
 
 
@@ -47,6 +59,9 @@ SEARCHABLE_DPI = _int("PDF_OCR_DPI", 200)
 # Cap VL input resolution to avoid native dynamic-graph VRAM spikes on dense pages.
 VL_RENDER_ZOOM = float(os.environ.get("PDF_OCR_VL_ZOOM", "1.5"))
 VL_MAX_PIXELS = _int("PDF_OCR_VL_MAX_PIXELS", 2200 * 2200)
+# Hard cap on VL generated tokens per region (matches the pipeline's own default). Bounds
+# worst-case decode so a degenerate/repeating page can't run to the 8192-token ceiling.
+VL_MAX_NEW_TOKENS = _int("PDF_OCR_VL_MAX_NEW_TOKENS", 4096)
 
 # DOCX backend: 'native' (res.save_to_word + docxcompose) or 'pandoc' (fallback).
 DOCX_BACKEND = os.environ.get("PDF_OCR_DOCX_BACKEND", "native")
@@ -57,3 +72,21 @@ STALE_S = _int("PDF_OCR_STALE_S", 120)
 MAX_ATTEMPTS = _int("PDF_OCR_MAX_ATTEMPTS", 3)
 JOB_MAX_AGE_S = _int("PDF_OCR_JOB_MAX_AGE", 7200)
 GC_INTERVAL_S = _int("PDF_OCR_GC_INTERVAL", 600)
+
+# Supervisor watchdog: a child that stops advancing a job's heartbeat (set_progress bumps
+# jobs.heartbeat_at per page) for this long is presumed wedged and gets killed + requeued,
+# so one stuck page can never freeze the whole worker. Generous enough to tolerate a slow
+# dense page; a genuine hang is unbounded, so it always trips.
+JOB_IDLE_TIMEOUT_S = _int("PDF_OCR_JOB_IDLE_TIMEOUT", 300)
+# How often the supervisor wakes while a child is busy — to refresh its heartbeat, run
+# GC/reap, and evaluate the watchdog — instead of blocking indefinitely on child output.
+WATCHDOG_TICK_S = _int("PDF_OCR_WATCHDOG_TICK_MS", 2000) / 1000
+# First-ever run downloads ~2 GB of weights; give model construction a generous ceiling
+# so a genuinely slow download isn't mistaken for a hung child.
+MODEL_LOAD_TIMEOUT_S = _int("PDF_OCR_MODEL_LOAD_TIMEOUT", 900)
+# Periodically recover jobs an earlier crashed worker left in 'processing' (belt over the
+# once-at-startup reap); never touches the job the live child is actively working.
+REAP_INTERVAL_S = _int("PDF_OCR_REAP_INTERVAL", 60)
+# Grace after a cancel request for the child to self-cancel between pages before the
+# supervisor kills it (mid-page generation is otherwise uninterruptible).
+CANCEL_GRACE_S = _int("PDF_OCR_CANCEL_GRACE_S", 15)

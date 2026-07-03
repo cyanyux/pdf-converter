@@ -40,7 +40,9 @@ def _render_page(page: fitz.Page, zoom: float, max_pixels: int) -> np.ndarray:
 def _predict_with_oom_guard(vl: Any, img: np.ndarray, max_pixels: int) -> list[Any]:
     for attempt in range(2):
         try:
-            return list(vl.predict(input=img, max_pixels=max_pixels))
+            return list(
+                vl.predict(input=img, max_pixels=max_pixels, max_new_tokens=config.VL_MAX_NEW_TOKENS)
+            )
         except (MemoryError, RuntimeError) as e:
             if "memory" in str(e).lower() and attempt == 0:
                 h, w = img.shape[:2]
@@ -48,6 +50,7 @@ def _predict_with_oom_guard(vl: Any, img: np.ndarray, max_pixels: int) -> list[A
                 log.warning("VL OOM on %dx%d; retrying at 0.7x", w, h)
                 continue
             raise
+    raise RuntimeError("VL predict retries exhausted")  # unreachable: loop returns or raises
 
 
 def _downscale(img: np.ndarray, factor: float) -> np.ndarray:
