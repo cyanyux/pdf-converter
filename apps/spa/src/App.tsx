@@ -1,5 +1,5 @@
 import { type Job, LOCALES, type Locale, type Mode } from "@pdf-ocr/shared";
-import { useCallback, useRef, useState } from "react";
+import { type ReactElement, useCallback, useRef, useState } from "react";
 import { JobCard } from "./components/JobCard.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { fetchPreview, triggerDownload } from "./lib/api.ts";
@@ -19,6 +19,70 @@ const FORMATS: { mode: Mode; titleKey: string; descKey: string; cls: string }[] 
   { mode: "markdown", titleKey: "fmt_md", descKey: "fmt_md_desc", cls: "md" },
   { mode: "word", titleKey: "fmt_word", descKey: "fmt_word_desc", cls: "word" },
 ];
+
+// Line-art format icons; stroke color is set per-format in CSS (.format-icon.<cls> svg).
+const FORMAT_ICONS: Record<Mode, ReactElement> = {
+  pdf: (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+    </svg>
+  ),
+  markdown: (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+      <polyline points="7 15 10 12 7 9" />
+      <line x1="14" y1="15" x2="17" y2="15" />
+    </svg>
+  ),
+  word: (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <path d="M9 15l2 2 4-4" />
+    </svg>
+  ),
+};
+
+// File/upload glyph for the empty drop zone.
+const DROP_ZONE_ICON = (
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.5}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="12" y1="18" x2="12" y2="12" />
+    <line x1="9" y1="15" x2="15" y2="15" />
+  </svg>
+);
 
 export function App() {
   const { t, locale, setLocale } = useI18n();
@@ -140,6 +204,7 @@ export function App() {
           addFiles(e.dataTransfer.files);
         }}
       >
+        <div className="drop-zone-icon">{DROP_ZONE_ICON}</div>
         <div className="drop-zone-text">{t("drop_zone_text")}</div>
         <div className="drop-zone-hint">{t("drop_zone_hint")}</div>
         <input
@@ -180,7 +245,7 @@ export function App() {
               checked={modes.has(f.mode)}
               onChange={() => toggleMode(f.mode)}
             />
-            <div className={`format-icon ${f.cls}`} />
+            <div className={`format-icon ${f.cls}`}>{FORMAT_ICONS[f.mode]}</div>
             <div className="format-title">{t(f.titleKey)}</div>
             <div className="format-desc">{t(f.descKey)}</div>
           </label>
