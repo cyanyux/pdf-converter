@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "vp exec tsgo --noEmit && vp build",
+    "build": "vp exec tsgo --noEmit && vp build --mode production",
     "preview": "vp preview",
     "test": "vp test",
     "check": "vp check"

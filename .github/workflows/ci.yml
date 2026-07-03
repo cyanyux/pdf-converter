@@ -9,15 +9,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Installs the `vp` CLI (version auto-resolved from the pinned `vite-plus`
+      # catalog entry), provisions Node from .node-version, caches deps, runs install.
+      - uses: voidzero-dev/setup-vp@v1
         with:
-          node-version: "24"
-      - run: npm install -g pnpm@11.9.0
-      - run: pnpm install
+          node-version-file: .node-version
+          cache: true
+          run-install: true
       - name: Format + lint + type-check (Vite+)
-        run: pnpm check
+        run: vp check
       - name: Tests (Vitest)
-        run: pnpm test
+        run: vp run -r test
 
   python:
     runs-on: ubuntu-latest

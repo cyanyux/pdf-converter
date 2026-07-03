@@ -1,19 +1,26 @@
 # syntax=docker/dockerfile:1
 
-# ---------- Stage 1: build SPA + bundle server (Vite+) ----------
-FROM node:24-bookworm-slim AS build
+# ---------- Stage 1: build SPA + bundle server (Vite+ toolchain image) ----------
+# The official Vite+ image ships the `vp` CLI + native toolchain; `vp` provisions the
+# exact Node.js from .node-version and manages pnpm, so one image builds the whole repo.
+FROM ghcr.io/voidzero-dev/vite-plus:0.2.2 AS build
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-RUN npm install -g pnpm@11.9.0
-COPY pnpm-workspace.yaml package.json vite.config.ts tsconfig.json ./
-COPY packages ./packages
-COPY apps ./apps
-RUN pnpm install
-# Builds apps/spa/dist (static SPA) and apps/server/dist (self-contained bundle).
-RUN pnpm run build
+# Manifests + lockfile first so the install layer caches across source-only changes.
+# (The image runs as the non-root `vp` user, hence --chown on every COPY.)
+COPY --chown=vp:vp pnpm-workspace.yaml pnpm-lock.yaml package.json .node-version ./
+COPY --chown=vp:vp packages/shared/package.json ./packages/shared/
+COPY --chown=vp:vp apps/server/package.json ./apps/server/
+COPY --chown=vp:vp apps/spa/package.json ./apps/spa/
+RUN vp install --frozen-lockfile
+# Source, then build: apps/spa/dist (static SPA) + apps/server/dist (self-contained bundle).
+COPY --chown=vp:vp tsconfig.json vite.config.ts ./
+COPY --chown=vp:vp packages ./packages
+COPY --chown=vp:vp apps ./apps
+RUN vp run -r build
+# Export the toolchain-provisioned Node.js so the runtime stage stays vp-free.
+RUN cp "$(vp env which node | head -1)" /tmp/node
 
-# ---------- Stage 2: runtime (CUDA 12.6 + Python 3.12 + Node 24) ----------
+# ---------- Stage 2: runtime (CUDA 12.6 + Python 3.12 + Node from build) ----------
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Taipei \
@@ -21,13 +28,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
     PATH="/opt/venv/bin:${PATH}"
 
-# System deps + Node 24 (Ubuntu 24.04 ships Python 3.12).
+# System deps (Ubuntu 24.04 ships Python 3.12). No nodesource/gnupg: the single Node.js
+# binary is copied from the build stage below (Vite+ resolved it from .node-version),
+# keeping the Node version identical build↔runtime. libatomic1 is a runtime dep of the
+# Node 26 binary (Node 24 did not need it).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-venv python3-pip pandoc curl ca-certificates gnupg \
-      libgl1 libglib2.0-0 libgomp1 supervisor \
- && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
- && apt-get install -y --no-install-recommends nodejs \
+      python3 python3-venv python3-pip pandoc curl ca-certificates \
+      libgl1 libglib2.0-0 libgomp1 libatomic1 supervisor \
  && rm -rf /var/lib/apt/lists/*
+COPY --from=build /tmp/node /usr/local/bin/node
 
 # PaddlePaddle GPU (cu126) in its own layer — the big 2 GB download stays cached
 # across app-dependency changes.
@@ -55,6 +64,7 @@ RUN chmod +x entrypoint.sh && mkdir -p /app/data/uploads /app/data/outputs
 
 ENV PDF_OCR_ROOT=/app \
     PDF_OCR_DEVICE=gpu:0 \
+    CUDA_MODULE_LOADING=EAGER \
     PYTHONPATH=/app/worker/src \
     PDF_OCR_STATIC=/app/apps/spa/dist \
     PDF_OCR_DB=/app/data/pdf-ocr.db \
