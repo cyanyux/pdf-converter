@@ -15,8 +15,16 @@ services:
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      # Recommended when exposed: require an API key on the REST API + MCP.
-      # API_KEY: "change-me"
+      # REQUIRED: the API key that guards the REST API + MCP. The container is
+      # internet-exposed via the cloudflared tunnel; entrypoint.sh refuses to start
+      # without it unless PDF_OCR_ALLOW_NO_AUTH=1. Provide it via a .env file or the
+      # shell environment. Note `:-` (not `:?`): an unset key must reach the container so
+      # entrypoint.sh can honour the PDF_OCR_ALLOW_NO_AUTH escape hatch below — a compose
+      # `:?` guard would abort interpolation before the container (and that check) ever runs.
+      API_KEY: ${API_KEY:-}
+      # Local-only escape hatch: uncomment to start WITHOUT an API key. Only on a
+      # trusted/loopback network — never with the tunnel attached.
+      # PDF_OCR_ALLOW_NO_AUTH: "1"
       # PDF_OCR_DEVICE: gpu:0   # or "cpu"
     networks:
       - app-net

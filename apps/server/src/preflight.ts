@@ -1,13 +1,12 @@
-import { open, readFile } from "node:fs/promises";
+import { open, readFile, stat } from "node:fs/promises";
 import { PDFDocument } from "pdf-lib";
+import { config } from "./config.ts";
 
 export type PreflightReason =
   | "not_pdf"
   | "empty_pdf"
   | "encrypted_pdf"
   | "invalid_pdf"
-  | "invalid_office"
-  | "office_needs_markdown"
   | "truncated";
 
 export interface PreflightResult {
@@ -16,20 +15,55 @@ export interface PreflightResult {
   pages?: number;
 }
 
+/** Bytes scanned from the tail of an oversized PDF for the trailer's `/Encrypt` reference. */
+const ENCRYPT_SCAN_TAIL_BYTES = 64 * 1024;
+
 /**
  * Validate an uploaded PDF cheaply before enqueuing so agents/UI get a fast,
- * synchronous 400 instead of a slow async job error: magic bytes, then a
- * structural parse for encryption + page count. (Encrypted PDFs throw here.)
+ * synchronous 400 instead of a slow async job error: check the %PDF- magic by
+ * reading only the first bytes, then — for files up to preflightMaxBytes — a
+ * structural parse for encryption + page count. Larger PDFs are accepted
+ * unparsed (the worker validates them) so pdf-lib's full in-memory parse can't
+ * OOM the request handler. (Encrypted PDFs throw during the parse path.)
  */
 export async function preflightPdf(path: string): Promise<PreflightResult> {
+  let size: number;
+  let fh;
+  try {
+    ({ size } = await stat(path));
+    fh = await open(path);
+  } catch {
+    return { ok: false, reason: "invalid_pdf" };
+  }
+  try {
+    const { bytesRead, buffer } = await fh.read(Buffer.alloc(5), 0, 5, 0);
+    if (bytesRead < 5 || buffer.toString("latin1") !== "%PDF-") {
+      return { ok: false, reason: "not_pdf" };
+    }
+    // Skip the pdf-lib structural parse for very large files: it reads the entire PDF into
+    // memory, so a 500MB upload (x concurrent requests) could exhaust it. Still do a cheap,
+    // bounded encryption check — an encrypted PDF carries `/Encrypt` in its trailer (near
+    // EOF), either as an indirect ref (`/Encrypt 5 0 R`) or an inline dict (`/Encrypt<<…>>`),
+    // so scan only the tail (O(tail) memory) to keep the fast synchronous `encrypted_pdf`
+    // rejection the small-file path gives. The value form avoids the `/EncryptMetadata`
+    // false-friend; a miss still fails in the worker.
+    if (size > config.preflightMaxBytes) {
+      const tailLen = Math.min(size, ENCRYPT_SCAN_TAIL_BYTES);
+      const tail = Buffer.alloc(tailLen);
+      await fh.read(tail, 0, tailLen, size - tailLen);
+      if (/\/Encrypt\s*(?:<<|\d+\s+\d+\s+R)/.test(tail.toString("latin1"))) {
+        return { ok: false, reason: "encrypted_pdf" };
+      }
+      return { ok: true };
+    }
+  } finally {
+    await fh.close();
+  }
   let buf: Buffer;
   try {
     buf = await readFile(path);
   } catch {
     return { ok: false, reason: "invalid_pdf" };
-  }
-  if (buf.length < 5 || buf.subarray(0, 5).toString("latin1") !== "%PDF-") {
-    return { ok: false, reason: "not_pdf" };
   }
   try {
     const doc = await PDFDocument.load(buf, { ignoreEncryption: false });
@@ -40,25 +74,5 @@ export async function preflightPdf(path: string): Promise<PreflightResult> {
     const msg = String(e instanceof Error ? e.message : e).toLowerCase();
     if (msg.includes("encrypt")) return { ok: false, reason: "encrypted_pdf" };
     return { ok: false, reason: "invalid_pdf" };
-  }
-}
-
-/**
- * Validate an Office upload (docx/xlsx/pptx) by its ZIP container magic (PK\x03\x04),
- * reading only the first bytes rather than the whole file.
- */
-export async function preflightOffice(path: string): Promise<PreflightResult> {
-  let fh;
-  try {
-    fh = await open(path);
-  } catch {
-    return { ok: false, reason: "invalid_office" };
-  }
-  try {
-    const { bytesRead, buffer } = await fh.read(Buffer.alloc(4), 0, 4, 0);
-    if (bytesRead >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b) return { ok: true };
-    return { ok: false, reason: "invalid_office" };
-  } finally {
-    await fh.close();
   }
 }

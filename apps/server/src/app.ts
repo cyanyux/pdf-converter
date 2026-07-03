@@ -17,11 +17,11 @@ import { streamSSE } from "hono/streaming";
 import { rateLimiter } from "hono-rate-limiter";
 import { z } from "zod";
 import { apiKeyAuth } from "./auth.ts";
-import { config, OFFICE_EXTS } from "./config.ts";
+import { config } from "./config.ts";
 import type { JobStore } from "./db.ts";
 import { buildOpenApiDoc, SWAGGER_HTML } from "./openapi.ts";
-import { preflightOffice, preflightPdf } from "./preflight.ts";
-import { safeResolve, sanitizeDownloadName } from "./safe-resolve.ts";
+import { preflightPdf } from "./preflight.ts";
+import { contentDisposition, safeResolve, sanitizeDownloadName } from "./safe-resolve.ts";
 import type { ProgressHub } from "./sse.ts";
 import type { UploadedFile } from "./upload.ts";
 import { parseMultipart } from "./upload.ts";
@@ -37,7 +37,7 @@ function fileResponse(path: string, downloadName: string, mime: string): Respons
   return new Response(web, {
     headers: {
       "content-type": mime,
-      "content-disposition": `attachment; filename="${downloadName}"`,
+      "content-disposition": contentDisposition(downloadName),
       "cache-control": "no-store",
     },
   });
@@ -47,6 +47,11 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
   const app = new Hono<Env>();
 
   app.use("/api/*", apiKeyAuth(["/api/v1/health"]));
+  // The OpenAPI doc + Swagger UI describe the whole (authenticated) API, so gate
+  // them behind the same key. apiKeyAuth is a no-op when API_KEY is unset, so
+  // they stay open for local dev / discovery.
+  app.use("/openapi.json", apiKeyAuth());
+  app.use("/docs", apiKeyAuth());
   app.use(
     "/api/v1/jobs",
     rateLimiter({
@@ -67,6 +72,10 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
       gpu: hb?.gpu ?? null,
       queueDepth: store.queueDepth(),
     };
+    // ?worker=required makes a dead worker a hard failure (503) so the container
+    // HEALTHCHECK goes red when the worker is down. The default (no param) stays
+    // 200 so the SPA status UI can render "degraded" without treating it as an error.
+    if (c.req.query("worker") === "required" && !alive) return c.json(body, 503);
     return c.json(body);
   });
 
@@ -121,7 +130,7 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
     if (store.queueDepth() >= config.maxQueueDepth) {
       return c.json({ error: "queue_full" }, 429);
     }
-    if (store.activeCount() >= config.maxActiveJobsPerKey) {
+    if (store.activeCount() >= config.maxActiveJobs) {
       return c.json({ error: "too_many_active_jobs" }, 429);
     }
 
@@ -179,27 +188,6 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
           });
           created.push({ id, filename: f.filename, mode, groupId: gid });
         }
-      } else if (OFFICE_EXTS.includes(ext as (typeof OFFICE_EXTS)[number])) {
-        // Office documents (docx/xlsx/pptx) convert to Markdown only.
-        const pf = await preflightOffice(f.path);
-        if (!pf.ok) {
-          await unlink(f.path).catch(() => {});
-          skipped.push({ filename: f.filename, reason: pf.reason ?? "invalid_office" });
-          continue;
-        }
-        if (!modes.includes("markdown")) {
-          await unlink(f.path).catch(() => {});
-          skipped.push({ filename: f.filename, reason: "office_needs_markdown" });
-          continue;
-        }
-        const id = store.enqueue({
-          mode: "markdown",
-          filename: f.filename,
-          locale,
-          uploadPath: f.path,
-          groupId: null,
-        });
-        created.push({ id, filename: f.filename, mode: "markdown", groupId: null });
       } else {
         await unlink(f.path).catch(() => {});
         skipped.push({ filename: f.filename, reason: "unsupported" });
@@ -277,11 +265,13 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
       if (name.toLowerCase().endsWith(".docx") || !statSync(full).isFile()) continue;
       files[name] = new Uint8Array(readFileSync(full));
     }
-    const zipped = zipSync(files, { level: 9 });
+    // level 1: images are already compressed, so a higher level just burns CPU
+    // on the event loop for no meaningful size win.
+    const zipped = zipSync(files, { level: 1 });
     return new Response(zipped, {
       headers: {
         "content-type": "application/zip",
-        "content-disposition": `attachment; filename="${base}.zip"`,
+        "content-disposition": contentDisposition(`${base}.zip`),
         "cache-control": "no-store",
       },
     });

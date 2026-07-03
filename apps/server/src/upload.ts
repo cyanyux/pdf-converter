@@ -34,7 +34,16 @@ export function parseMultipart(c: Context<{ Bindings: HttpBindings }>): Promise<
     try {
       bb = busboy({
         headers: req.headers,
-        limits: { fileSize: config.maxUploadBytes, files: config.maxFilesPerRequest },
+        limits: {
+          fileSize: config.maxUploadBytes,
+          files: config.maxFilesPerRequest,
+          // Cap non-file parts so a crafted multipart body can't exhaust memory
+          // via unbounded field count/size (files carry the payload, not fields).
+          fields: 20,
+          fieldSize: 100 * 1024,
+          fieldNameSize: 200,
+          parts: config.maxFilesPerRequest + 40,
+        },
       });
     } catch (e) {
       reject(e instanceof Error ? e : new Error(String(e)));
@@ -81,8 +90,18 @@ export function parseMultipart(c: Context<{ Bindings: HttpBindings }>): Promise<
       filesLimitHit = true;
     });
 
+    // Parts past the `parts` cap: busboy stops emitting further `file`/`field` events and
+    // fires this once. Surface it the same way as filesLimit so any dropped uploads show up
+    // in `skipped[]` instead of vanishing silently (field parts are separately capped well
+    // below this, so hitting the parts cap effectively means files were dropped).
+    bb.on("partsLimit", () => {
+      filesLimitHit = true;
+    });
+
     bb.on("file", (_name, stream, info) => {
-      // Preserve the real extension so the worker can route by file type.
+      // Store the upload under a whitelisted extension (.pdf) or else .bin — this is just a
+      // sane on-disk suffix / defense against odd names; the worker dispatches by job.mode,
+      // NOT by file extension, so this suffix is not load-bearing for routing.
       const ext = extname(info.filename || "").toLowerCase();
       const safeExt = ACCEPTED_EXTS.includes(ext) ? ext : ".bin";
       const path = join(config.uploadsDir, `${randomUUID()}${safeExt}`);

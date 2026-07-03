@@ -6,7 +6,6 @@ Guidance for AI agents and contributors working in this repository.
 
 Self-hosted, GPU-accelerated PDF OCR. Upload a PDF, get back a **searchable PDF**,
 **Markdown**, or **Word (.docx)** — powered by PaddleOCR 3.7 (PP-OCRv6 + PaddleOCR-VL).
-Digital **Office files** (`.docx`/`.xlsx`/`.pptx`) can also be converted straight to Markdown.
 
 Architecture: a **TypeScript** monorepo (React SPA + Hono API + MCP, managed by
 **Vite+**) talking to a headless **Python GPU worker** through a durable **SQLite**

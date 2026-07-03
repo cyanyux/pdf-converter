@@ -22,37 +22,56 @@ RUN cp "$(vp env which node | head -1)" /tmp/node
 
 # ---------- Stage 2: runtime (CUDA 12.6 + Python 3.12 + Node from build) ----------
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04 AS runtime
+# uv: SOTA Python installer/resolver (parallel downloads + fast resolver, replaces pip).
+# Paired with the BuildKit --mount=type=cache below, every wheel is fetched at most once
+# across ALL rebuilds — editing a dep line relinks from cache instead of re-downloading.
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /usr/local/bin/
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Taipei \
     DISABLE_MODEL_SOURCE_CHECK=True \
     PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True \
-    PATH="/opt/venv/bin:${PATH}"
+    VIRTUAL_ENV=/opt/venv \
+    PATH="/opt/venv/bin:${PATH}" \
+    UV_LINK_MODE=copy
 
 # System deps (Ubuntu 24.04 ships Python 3.12). No nodesource/gnupg: the single Node.js
 # binary is copied from the build stage below (Vite+ resolved it from .node-version),
 # keeping the Node version identical build↔runtime. libatomic1 is a runtime dep of the
-# Node 26 binary (Node 24 did not need it).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-venv python3-pip pandoc curl ca-certificates \
-      libgl1 libglib2.0-0 libgomp1 libatomic1 supervisor \
- && rm -rf /var/lib/apt/lists/*
+# Node 26 binary (Node 24 did not need it). apt caches live in BuildKit cache mounts (so
+# the package/list downloads persist across rebuilds); hence no `rm -rf` of the lists.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+      python3 python3-venv pandoc curl ca-certificates \
+      libgl1 libglib2.0-0 libgomp1 libatomic1 supervisor
 COPY --from=build /tmp/node /usr/local/bin/node
 
-# PaddlePaddle GPU (cu126) in its own layer — the big 2 GB download stays cached
-# across app-dependency changes.
-RUN python3 -m venv /opt/venv \
- && pip install --no-cache-dir paddlepaddle-gpu==3.3.1 \
-      -i https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
+# One venv, created by uv from the system 3.12 interpreter. --seed puts pip in the venv so
+# the optional runtime `paddleocr install_hpi_deps` (entrypoint.sh) still works.
+RUN uv venv --seed --python /usr/bin/python3.12 /opt/venv
+
+# PaddlePaddle GPU (cu126) in its own layer — the big ~1 GB wheel (6.8 GB installed) stays
+# cached across app-dependency changes, and the uv cache mount means it downloads at most
+# once even if this layer is ever invalidated.
+# --index-strategy unsafe-best-match: paddlepaddle-gpu==3.3.1 lives ONLY on the cu126 mirror,
+# but the name also exists on PyPI at other versions. uv's default (first-index) guard would
+# lock to PyPI and fail; unsafe-best-match considers both indexes (both official/trusted here),
+# restoring pip's merge-all-indexes behavior.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python --index-strategy unsafe-best-match paddlepaddle-gpu==3.3.1 \
+      --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
       --extra-index-url https://pypi.org/simple/
-# PaddleOCR 3.7 stack + doc2md (Office→Markdown) + doc utilities.
-RUN pip install --no-cache-dir \
-      "paddleocr[doc-parser,doc2md]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
+# PaddleOCR 3.7 stack (PP-OCRv6 searchable-PDF + PaddleOCR-VL doc-parse) + doc utilities.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python \
+      "paddleocr[doc-parser]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
       docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
 # ONNX Runtime engine for PP-OCR (paddle2onnx export + onnxruntime-gpu): ~1.14x faster than
 # native Paddle on PP-OCRv6, identical output. Separate layer so the big paddle layers stay
 # cached. Selected via PDF_OCR_ENGINE=onnxruntime (default); auto-falls back to Paddle.
 # Pinned to the 1.23 line: it targets CUDA 12.x (matches the base image); 1.24+ links CUDA 13.
-RUN pip install --no-cache-dir onnxruntime-gpu==1.23.0 paddle2onnx==2.0.2rc3
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python onnxruntime-gpu==1.23.0 paddle2onnx==2.0.2rc3
 
 WORKDIR /app
 COPY db ./db
@@ -76,5 +95,5 @@ ENV PDF_OCR_ROOT=/app \
 
 EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD curl -f http://localhost:5000/api/v1/health || exit 1
+  CMD curl -fsS "http://127.0.0.1:5000/api/v1/health?worker=required" || exit 1
 ENTRYPOINT ["/app/entrypoint.sh"]

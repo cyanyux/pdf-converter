@@ -11,6 +11,7 @@ import contextlib
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from bs4 import BeautifulSoup
@@ -54,7 +55,7 @@ def html_table_to_markdown(html: str) -> str:
         cells = row.find_all(["td", "th"])
         row_cells: list[str] = []
         for cell in cells:
-            colspan = int(cell.get("colspan", 1) or 1)
+            colspan = int(str(cell.get("colspan") or 1))
             for br in cell.find_all("br"):
                 br.replace_with(" ")
             text = " ".join(cell.get_text(separator=" ", strip=True).replace("|", "\\|").split())
@@ -77,8 +78,8 @@ def html_img_to_markdown(html: str, output_dir: Path | None) -> str:
     img = soup.find("img")
     if not img:
         return html
-    src = img.get("src", "")
-    alt = img.get("alt", "")
+    src = str(img.get("src") or "")
+    alt = str(img.get("alt") or "")
     if not src:
         return html
     if alt.strip().lower() == "image":
@@ -101,15 +102,11 @@ def html_img_to_markdown(html: str, output_dir: Path | None) -> str:
     return f"\n\n![{alt}]({src})\n\n"
 
 
-def _replace_all(text: str, patterns: list[re.Pattern[str]], fn) -> str:
-    for _ in range(100):  # bounded to avoid pathological loops
-        for pat in patterns:
-            m = pat.search(text)
-            if m:
-                text = text[: m.start()] + fn(m.group(0)) + text[m.end() :]
-                break
-        else:
-            return text
+def _replace_all(text: str, patterns: list[re.Pattern[str]], fn: Callable[[str], str]) -> str:
+    # Convert every match in one pass per pattern (unbounded; earlier patterns are more
+    # specific, so they run first). fn receives the full matched chunk (m.group(0)).
+    for pat in patterns:
+        text = pat.sub(lambda m: fn(m.group(0)), text)
     return text
 
 

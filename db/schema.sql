@@ -44,3 +44,4 @@ CREATE TABLE IF NOT EXISTS worker_heartbeat (
 
 CREATE INDEX IF NOT EXISTS idx_jobs_status_created ON jobs (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_group ON jobs (group_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_upload ON jobs (upload_path);

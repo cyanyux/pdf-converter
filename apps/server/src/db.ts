@@ -81,6 +81,37 @@ function toJob(row: JobRow, prog: ProgressRow | undefined): Job {
   };
 }
 
+// jobs LEFT JOIN progress in ONE query (progress has a PK on job_id), so get/list/
+// activeJobs don't fan out into a per-row progress SELECT (the old N+1).
+const JOB_SELECT =
+  "SELECT j.*, p.current AS p_current, p.total AS p_total, p.percent AS p_percent, " +
+  "p.status AS p_status, p.message AS p_message, p.updated_at AS p_updated_at " +
+  "FROM jobs j LEFT JOIN progress p ON p.job_id = j.id";
+
+interface JoinedRow extends JobRow {
+  p_current: number | null;
+  p_total: number | null;
+  p_percent: number | null;
+  p_status: string | null;
+  p_message: string | null;
+  p_updated_at: number | null;
+}
+
+function toJobJoined(row: JoinedRow): Job {
+  const prog: ProgressRow | undefined =
+    row.p_updated_at == null
+      ? undefined
+      : {
+          current: row.p_current ?? 0,
+          total: row.p_total ?? 0,
+          percent: row.p_percent ?? 0,
+          status: row.p_status ?? "",
+          message: row.p_message ?? "",
+          updated_at: row.p_updated_at,
+        };
+  return toJob(row, prog);
+}
+
 export interface EnqueueInput {
   mode: Mode;
   filename: string;
@@ -143,39 +174,25 @@ export class JobStore {
   }
 
   get(id: string): Job | null {
-    const row = this.db.prepare("SELECT * FROM jobs WHERE id = ?").get(id) as JobRow | undefined;
-    if (!row) return null;
-    const prog = this.db.prepare("SELECT * FROM progress WHERE job_id = ?").get(id) as
-      | ProgressRow
-      | undefined;
-    return toJob(row, prog);
+    const row = this.db.prepare(`${JOB_SELECT} WHERE j.id = ?`).get(id) as JoinedRow | undefined;
+    return row ? toJobJoined(row) : null;
   }
 
   list(limit = 200): Job[] {
     const rows = this.db
-      .prepare("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ?")
-      .all(limit) as unknown as JobRow[];
-    return rows.map((r) => {
-      const prog = this.db.prepare("SELECT * FROM progress WHERE job_id = ?").get(r.id) as
-        | ProgressRow
-        | undefined;
-      return toJob(r, prog);
-    });
+      .prepare(`${JOB_SELECT} ORDER BY j.created_at DESC LIMIT ?`)
+      .all(limit) as unknown as JoinedRow[];
+    return rows.map(toJobJoined);
   }
 
   /** Non-terminal jobs (for the SSE fan-out ticker and the active-jobs cap). */
   activeJobs(): Job[] {
     const rows = this.db
       .prepare(
-        "SELECT * FROM jobs WHERE status NOT IN ('done','error','cancelled') ORDER BY created_at",
+        `${JOB_SELECT} WHERE j.status NOT IN ('done','error','cancelled') ORDER BY j.created_at`,
       )
-      .all() as unknown as JobRow[];
-    return rows.map((r) => {
-      const prog = this.db.prepare("SELECT * FROM progress WHERE job_id = ?").get(r.id) as
-        | ProgressRow
-        | undefined;
-      return toJob(r, prog);
-    });
+      .all() as unknown as JoinedRow[];
+    return rows.map(toJobJoined);
   }
 
   requestCancel(id: string): JobStatus | null {

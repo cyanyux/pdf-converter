@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Callable
 from typing import Any
 
 from . import config, docparse, models
@@ -28,7 +29,7 @@ def _emit(line: str) -> None:
     sys.stdout.flush()
 
 
-def _progress_cb(store: Store, job_ids: list[str]):
+def _progress_cb(store: Store, job_ids: list[str]) -> Callable[[int, int, str, str], None]:
     def cb(current: int, total: int, status: str, message: str) -> None:
         for jid in job_ids:
             store.set_progress(jid, current, total, status, message)
@@ -36,7 +37,7 @@ def _progress_cb(store: Store, job_ids: list[str]):
     return cb
 
 
-def _cancel_cb(store: Store, job_ids: list[str]):
+def _cancel_cb(store: Store, job_ids: list[str]) -> Callable[[], bool]:
     # Dual export: cancel the VL run only if ALL group jobs are cancelled.
     def cb() -> bool:
         return all(store.is_cancel_requested(jid) for jid in job_ids)

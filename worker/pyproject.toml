@@ -10,12 +10,12 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
   # NOTE: paddlepaddle-gpu is installed separately from the cu126 index in the
   # Dockerfile (it is not on PyPI): paddlepaddle-gpu==3.3.1 -i .../stable/cu126/
-  "paddleocr[doc-parser,doc2md]==3.7.0",
+  "paddleocr[doc-parser]==3.7.0",
   "pymupdf==1.28.0",
   "python-docx==1.2.0",
   "docxcompose",
   "beautifulsoup4==4.15.0",
-  "numpy==2.3.5",
+  "numpy>=2.3,<2.4",
 ]
 
 [project.optional-dependencies]
@@ -44,6 +44,14 @@ python_version = "3.12"
 strict = true
 files = ["src", "tests"]
 ignore_missing_imports = true
+# The GPU stack (pymupdf/fitz, paddle, python-docx, docxcompose) ships no type stubs, so
+# every call into it is "untyped"; flagging those is noise, not a real type signal. Keep the
+# rest of strict (untyped defs in OUR code, generics, Any-returns are still errors).
+disallow_untyped_calls = false
+# CI type-checks GPU-free (paddle/pymupdf/numpy not installed), so those modules resolve to
+# Any and the `# type: ignore[attr-defined]` on paddle device calls is unused there — while
+# locally (paddle present) it IS needed. Don't fail on that environment-dependent difference.
+warn_unused_ignores = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

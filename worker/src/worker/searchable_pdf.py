@@ -38,11 +38,14 @@ def pixmap_to_numpy(pix: fitz.Pixmap) -> np.ndarray:
 
 
 def parse_ocr_result(res: Any, min_confidence: float, locale: str | None) -> list[dict[str, Any]]:
-    texts = res.get("rec_texts") if hasattr(res, "get") else res["rec_texts"]
+    # Result may be a dict-like (.get) or only subscriptable (__getitem__); use one accessor.
+    # (SIM401 would suggest res.get here, but this branch is exactly the no-.get case.)
+    get = res.get if hasattr(res, "get") else (lambda k, d=None: res[k] if k in res else d)  # noqa: SIM401
+    texts = get("rec_texts")
     if not texts:
         return []
-    polys = (res.get("rec_polys") if hasattr(res, "get") else None) or res.get("dt_polys") or []
-    scores = res.get("rec_scores") or []
+    polys = get("rec_polys") or get("dt_polys") or []
+    scores = get("rec_scores") or []
     out: list[dict[str, Any]] = []
     for i, text in enumerate(texts):
         if i >= len(polys):
@@ -61,7 +64,7 @@ def parse_ocr_result(res: Any, min_confidence: float, locale: str | None) -> lis
     return out
 
 
-def _batch_ocr(ocr: Any, images: list[np.ndarray], min_conf: float, locale: str | None) -> list[list[dict]]:
+def _batch_ocr(ocr: Any, images: list[np.ndarray], min_conf: float, locale: str | None) -> list[list[dict[str, Any]]]:
     if not images:
         return []
     try:
@@ -69,7 +72,7 @@ def _batch_ocr(ocr: Any, images: list[np.ndarray], min_conf: float, locale: str 
         return [parse_ocr_result(r, min_conf, locale) for r in results]
     except Exception as e:
         log.warning("batch OCR failed (%s); falling back to per-image", e)
-        out: list[list[dict]] = []
+        out: list[list[dict[str, Any]]] = []
         for img in images:
             try:
                 out.append(parse_ocr_result(ocr.predict(img)[0], min_conf, locale))
@@ -134,18 +137,16 @@ def create_searchable_pdf(
                     m = m.prerotate(rot)
                 pix = page.get_pixmap(matrix=m)
                 images.append(pixmap_to_numpy(pix))
-                infos.append({"idx": idx, "rect": rect, "rot": rot, "zoom": eff_zoom, "dpi": eff_dpi})
-                del pix
+                # Keep pix (same matrix/rotation) to reuse as the output image below,
+                # instead of rasterizing each page a second time. Up to OCR_BATCH_SIZE
+                # pixmaps are held per batch, then freed in the insert loop.
+                infos.append({"idx": idx, "rect": rect, "rot": rot, "zoom": eff_zoom, "dpi": eff_dpi, "pix": pix})
 
             ocr_results = _batch_ocr(ocr, images, min_confidence, locale)
             del images
 
             for info, ocr_data in zip(infos, ocr_results, strict=True):
-                page = src[info["idx"]]
-                m = fitz.Matrix(info["zoom"], info["zoom"])
-                if info["rot"]:
-                    m = m.prerotate(info["rot"])
-                pix = page.get_pixmap(matrix=m)
+                pix = info["pix"]
                 rect = info["rect"]
                 new_page = new_doc.new_page(width=rect.width, height=rect.height)  # strict order
                 try:
@@ -155,6 +156,10 @@ def create_searchable_pdf(
                     log.error("page %d overlay failed: %s", info["idx"] + 1, e)
                     failed.append(info["idx"] + 1)
                 finally:
+                    # Drop BOTH references (local alias + the batch's infos[i]['pix']) so this
+                    # pixmap frees now, page-by-page, instead of the whole batch staying
+                    # resident until `infos` is replaced on the next outer iteration.
+                    info["pix"] = None
                     del pix
 
         src.close()
@@ -177,7 +182,7 @@ def create_searchable_pdf(
 
 def _overlay_text(
     new_page: fitz.Page,
-    ocr_data: list[dict],
+    ocr_data: list[dict[str, Any]],
     rect: fitz.Rect,
     zoom: float,
     dpi: int,
@@ -187,7 +192,7 @@ def _overlay_text(
     scale_x, scale_y = rect.width / img_w, rect.height / img_h
     row_tol = max(10, int(20 * (dpi / 200)))
 
-    def sort_key(item: dict) -> tuple[int, float]:
+    def sort_key(item: dict[str, Any]) -> tuple[int, float]:
         poly = item["poly"]
         if len(poly) >= 4:
             y_min = min(p[1] for p in poly)

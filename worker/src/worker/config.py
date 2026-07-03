@@ -62,6 +62,9 @@ VL_MAX_PIXELS = _int("PDF_OCR_VL_MAX_PIXELS", 2200 * 2200)
 # Hard cap on VL generated tokens per region (matches the pipeline's own default). Bounds
 # worst-case decode so a degenerate/repeating page can't run to the 8192-token ceiling.
 VL_MAX_NEW_TOKENS = _int("PDF_OCR_VL_MAX_NEW_TOKENS", 4096)
+# Optional VL recognition backend override (passed to PaddleOCRVL as vl_rec_backend);
+# None leaves the pipeline's default. Set to force a specific inference backend.
+VL_REC_BACKEND = os.environ.get("PDF_OCR_VL_REC_BACKEND") or None
 
 # DOCX backend: 'native' (res.save_to_word + docxcompose) or 'pandoc' (fallback).
 DOCX_BACKEND = os.environ.get("PDF_OCR_DOCX_BACKEND", "native")
@@ -78,6 +81,11 @@ GC_INTERVAL_S = _int("PDF_OCR_GC_INTERVAL", 600)
 # so one stuck page can never freeze the whole worker. Generous enough to tolerate a slow
 # dense page; a genuine hang is unbounded, so it always trips.
 JOB_IDLE_TIMEOUT_S = _int("PDF_OCR_JOB_IDLE_TIMEOUT", 300)
+# Post-recognition phases (VL table-merge/restructure, native docx save, pandoc) do opaque
+# CPU work with no per-page heartbeat, so the strict timeout above would false-kill a slow-
+# but-alive save. Once a job reports a save-phase progress status the watchdog uses this
+# looser bound instead. The CUDA-hang risk is confined to recognition, which stays strict.
+SAVE_IDLE_TIMEOUT_S = _int("PDF_OCR_SAVE_IDLE_TIMEOUT", 1800)
 # How often the supervisor wakes while a child is busy — to refresh its heartbeat, run
 # GC/reap, and evaluate the watchdog — instead of blocking indefinitely on child output.
 WATCHDOG_TICK_S = _int("PDF_OCR_WATCHDOG_TICK_MS", 2000) / 1000

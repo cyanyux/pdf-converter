@@ -22,7 +22,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import config, models, office
+from . import config, models
 from .i18n import msg
 from .store import TERMINAL, Store
 
@@ -33,6 +33,9 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] work
 log = logging.getLogger("worker")
 
 FAMILY_BY_MODE = {"pdf": "ppocr", "markdown": "vl", "word": "vl"}
+# Progress statuses meaning "past recognition, in the opaque CPU save/consolidation phase";
+# the watchdog gives these a looser idle bound (config.SAVE_IDLE_TIMEOUT_S).
+_SAVE_PHASES = ("saving", "converting")
 _stop = False
 
 
@@ -51,7 +54,7 @@ class ModelChild:
     stdout pipe can't back up regardless of how chatty the child is.
     """
 
-    def __init__(self, family: str, load_timeout_s: float) -> None:
+    def __init__(self, family: str, load_timeout_s: float, on_wait: Callable[[], None] | None = None) -> None:
         self.family = family
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "worker.child", family],
@@ -64,7 +67,7 @@ class ModelChild:
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
         self._reader.start()
-        if not self._await("@@READY", load_timeout_s):
+        if not self._await("@@READY", load_timeout_s, on_wait):
             self.kill()
             raise RuntimeError(f"{family} child failed to reach READY")
         log.info("child %s ready (pid %s)", family, self.proc.pid)
@@ -87,13 +90,15 @@ class ModelChild:
         except queue.Empty:
             return _TICK_EMPTY
 
-    def _await(self, marker: str, timeout_s: float) -> bool:
+    def _await(self, marker: str, timeout_s: float, on_wait: Callable[[], None] | None = None) -> bool:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             item = self._next(1.0)
             if item is _TICK_EMPTY:
                 if self.proc.poll() is not None:
                     return False  # child exited without emitting the marker
+                if on_wait is not None:
+                    on_wait()  # keep the worker heartbeat fresh during a long (~2 GB) model load
                 continue
             if item is None:
                 return False
@@ -129,6 +134,12 @@ class ModelChild:
                 return "DONE"
             if line.startswith("@@ERR"):
                 return "ERR"
+            if line.startswith("@@FATAL"):
+                # Child hit an unrecoverable error post-READY but is still alive; don't
+                # wait out the idle watchdog — treat it as dead so the supervisor
+                # closes + requeues immediately.
+                log.error("child fatal: %s", line)
+                return "DEAD"
 
     def alive(self) -> bool:
         return self.proc.poll() is None
@@ -186,7 +197,10 @@ def main() -> None:
             child.close()
             child = None
         if child is None:
-            child = ModelChild(family, config.MODEL_LOAD_TIMEOUT_S)
+            # on_wait=maintenance keeps the worker heartbeat fresh during the model load
+            # (first run downloads ~2 GB), so /health and the container HEALTHCHECK don't
+            # flag a still-loading worker as dead.
+            child = ModelChild(family, config.MODEL_LOAD_TIMEOUT_S, on_wait=maintenance)
         return child
 
     def maintenance() -> None:
@@ -195,8 +209,11 @@ def main() -> None:
         nonlocal last_hb, last_gc
         now = time.time()
         if now - last_hb > 5:
-            fam = child.family if child else None
-            store.heartbeat(fam, models.gpu_info(fam))
+            try:
+                fam = child.family if child else None
+                store.heartbeat(fam, models.gpu_info(fam))
+            except Exception as e:
+                log.warning("heartbeat error: %s", e)
             last_hb = now
         if now - last_gc > config.GC_INTERVAL_S:
             try:
@@ -206,25 +223,52 @@ def main() -> None:
             last_gc = now
 
     def watchdog(job: dict[str, Any]) -> Callable[[], str | None]:
-        """Per-job tick callback. Keeps maintenance running, and returns a verdict that
-        makes process() give up on a stuck child: TIMEOUT (job made no progress for
-        JOB_IDLE_TIMEOUT_S — heartbeat_at advances per page) or CANCELLED (cancel requested
-        and the child didn't self-cancel between pages within CANCEL_GRACE_S)."""
+        """Per-claim tick callback. Keeps maintenance running, and returns a verdict that
+        makes process() give up on a stuck child: TIMEOUT (no progress for JOB_IDLE_TIMEOUT_S
+        — heartbeat_at advances per page) or CANCELLED (cancel requested and the child didn't
+        self-cancel between pages within CANCEL_GRACE_S).
+
+        Group-aware: a VL dual export (markdown+word) is driven by ONE claimed job, but the
+        child advances and saves EACH group member under its own id. So the watchdog must look
+        at the whole group, not just the claimed job — otherwise, once the claimed member (say
+        markdown) is set 'done' and its heartbeat freezes, a slow word save (which heartbeats
+        only the word job) is false-killed on the frozen 'done' heartbeat, the exact wedge the
+        save-phase leniency was meant to avoid. Group membership is fixed at claim time."""
+        gid = job.get("group_id")
+        ids = [g["id"] for g in store.group_jobs(gid)] if gid else [job["id"]]
+        if job["id"] not in ids:
+            ids.append(job["id"])
         state: dict[str, float | None] = {"cancel_at": None}
 
         def on_tick() -> str | None:
             maintenance()
             now = time.time()
-            if store.is_cancel_requested(job["id"]):
+            # Escalate to a hard kill only when every member the child is ACTUALLY working is
+            # cancelled — the claimed job plus any still-non-terminal sibling. This mirrors the
+            # child's _cancel_cb (child.py), which builds job_ids from the same active set: a
+            # partial cancel is handled per-export by the child, which still produces the
+            # sibling the user did not cancel. Including an already-'done' sibling here would
+            # wedge all() False and defer a genuine whole-group cancel from CANCEL_GRACE_S to
+            # the slow TIMEOUT path. (job["id"] is always kept, so active_ids is never empty.)
+            active_ids = [i for i in ids if i == job["id"] or store.status_of(i) not in TERMINAL]
+            if all(store.is_cancel_requested(i) for i in active_ids):
                 if state["cancel_at"] is None:
                     state["cancel_at"] = now
                 elif now - state["cancel_at"] > config.CANCEL_GRACE_S:
                     return "CANCELLED"
             else:
                 state["cancel_at"] = None
-            hb = store.job_heartbeat_at(job["id"])
-            if hb is not None and now - hb > config.JOB_IDLE_TIMEOUT_S:
-                return "TIMEOUT"
+            # Freshest heartbeat across the group: recognition bumps all members, each save
+            # bumps only its own job, so the max is the child's true last-progress time.
+            hbs = [h for h in (store.job_heartbeat_at(i) for i in ids) if h is not None]
+            if hbs:
+                # Recognition (progress status 'processing') keeps the strict CUDA-hang
+                # timeout; if ANY member is in the opaque save/consolidation phase, use the
+                # looser bound so a slow-but-alive save isn't mistaken for a wedge.
+                in_save = any(store.progress_status(i) in _SAVE_PHASES for i in ids)
+                limit = config.SAVE_IDLE_TIMEOUT_S if in_save else config.JOB_IDLE_TIMEOUT_S
+                if now - max(hbs) > limit:
+                    return "TIMEOUT"
             return None
 
         return on_tick
@@ -245,21 +289,6 @@ def main() -> None:
             job = store.claim()
             if job is None:
                 time.sleep(config.POLL_S)
-                continue
-
-            # Office documents convert on CPU without a GPU model child.
-            if office.is_office(job["upload_path"] or ""):
-                log.info("claimed %s (office -> markdown)", job["id"])
-                try:
-                    office.process(store, job)
-                    log.info("job %s -> DONE (office)", job["id"])
-                except Exception as e:
-                    store.set_error(job["id"], str(e))
-                    log.exception("office job %s failed", job["id"])
-                finally:
-                    # Always reclaim the upload. The old error path skipped this, and
-                    # the retention GC would never catch a non-PDF upload on its own.
-                    cleanup_upload(store, job)
                 continue
 
             family = FAMILY_BY_MODE.get(job["mode"], "vl")

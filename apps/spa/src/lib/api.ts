@@ -48,7 +48,7 @@ export function downloadUrl(job: Job): string {
 }
 
 export function downloadFilename(job: Job): string {
-  const base = job.result?.originalName?.replace(/\.[^./]+$/, "") ?? job.id;
+  const base = job.result?.originalName?.replace(/\.[^.]+$/, "") ?? job.id;
   if (job.mode === "pdf") return job.result?.originalName ?? `${base}.pdf`;
   return `${base}.${job.mode === "markdown" ? "zip" : "docx"}`;
 }

@@ -33,16 +33,20 @@ export function apiKeyAuth(publicPaths: readonly string[] = []): MiddlewareHandl
 }
 
 /**
- * Warn loudly if the server exposes a non-localhost interface without a key.
- * (Containers bind 0.0.0.0 by design, so this warns rather than refuses; put the
- * service behind a reverse proxy / access control, or set API_KEY.)
+ * Warn loudly whenever the server runs without an API_KEY — the API is then
+ * unauthenticated regardless of bind, and a tunnel/proxy forwards to loopback so
+ * a non-loopback check alone would stay silent. (Containers bind 0.0.0.0 by
+ * design, so this warns rather than refuses; put the service behind a reverse
+ * proxy / access control, or set API_KEY.)
  */
 export function warnIfInsecureBind(): void {
-  if (isExposedBind(config.host) && !config.apiKey) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[server] WARNING: bound to ${config.host} without API_KEY — the API is unauthenticated. ` +
-        "Set API_KEY or restrict access via a reverse proxy / network policy.",
-    );
-  }
+  if (config.apiKey) return;
+  const bindDetail = isExposedBind(config.host)
+    ? ` (bound to ${config.host}, a non-loopback interface)`
+    : "";
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[server] WARNING: no API_KEY set — the API is UNAUTHENTICATED${bindDetail}. ` +
+      "Set API_KEY or ensure it is not exposed (tunnel/proxy).",
+  );
 }

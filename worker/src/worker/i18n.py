@@ -148,7 +148,7 @@ def normalize_locale(locale: str | None) -> str:
     return DEFAULT_LOCALE
 
 
-def msg(key: str, locale: str | None = None, **kwargs) -> str:
+def msg(key: str, locale: str | None = None, **kwargs: object) -> str:
     """Get a translated message by key.
 
     Args:

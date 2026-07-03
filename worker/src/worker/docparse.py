@@ -29,20 +29,19 @@ CancelCb = Callable[[], bool]
 
 
 def _render_page(page: fitz.Page, zoom: float, max_pixels: int) -> np.ndarray:
+    # Pick the final zoom up front (from the page rect) so we rasterize only once.
+    rect = page.rect
+    area = (rect.width * zoom) * (rect.height * zoom)
+    if area > max_pixels:
+        zoom = max(0.4, zoom * (max_pixels / area) ** 0.5)
     pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
-    if pix.width * pix.height > max_pixels:
-        factor = (max_pixels / (pix.width * pix.height)) ** 0.5
-        z = max(0.4, zoom * factor)
-        pix = page.get_pixmap(matrix=fitz.Matrix(z, z))
     return pixmap_to_numpy(pix)
 
 
 def _predict_with_oom_guard(vl: Any, img: np.ndarray, max_pixels: int) -> list[Any]:
     for attempt in range(2):
         try:
-            return list(
-                vl.predict(input=img, max_pixels=max_pixels, max_new_tokens=config.VL_MAX_NEW_TOKENS)
-            )
+            return list(vl.predict(input=img, max_pixels=max_pixels, max_new_tokens=config.VL_MAX_NEW_TOKENS))
         except (MemoryError, RuntimeError) as e:
             if "memory" in str(e).lower() and attempt == 0:
                 h, w = img.shape[:2]
@@ -58,7 +57,8 @@ def _downscale(img: np.ndarray, factor: float) -> np.ndarray:
     nh, nw = max(1, int(h * factor)), max(1, int(w * factor))
     ys = (np.arange(nh) / factor).astype(int).clip(0, h - 1)
     xs = (np.arange(nw) / factor).astype(int).clip(0, w - 1)
-    return img[ys][:, xs].copy()
+    out: np.ndarray = img[ys][:, xs].copy()
+    return out
 
 
 def run_vl(

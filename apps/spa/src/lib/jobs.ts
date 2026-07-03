@@ -30,7 +30,7 @@ function stub(p: Persisted): Job {
   };
 }
 
-export type ToastKind = "done" | "error";
+export type ToastKind = "done" | "error" | "cancelled";
 
 /**
  * Job store: submit, poll non-terminal jobs once per second, persist ids across
@@ -81,40 +81,55 @@ export function useJobStore(locale: Locale, onToast: (kind: ToastKind, job: Job)
   }, [byId, order]);
 
   // Poll non-terminal jobs.
+  const inFlight = useRef(false);
   useEffect(() => {
     const tick = async () => {
+      // Skip polling while backgrounded — the tab isn't visible, so there's no UI
+      // to update and we avoid needless requests.
+      if (document.hidden) return;
+      // In-flight guard: if the previous tick's fetches haven't resolved, skip this
+      // one so overlapping ticks can't race (e.g. a late getJob resurrecting a job
+      // that was removed in the meantime).
+      if (inFlight.current) return;
       const active = Object.values(byIdRef.current).filter((j) => !isTerminal(j.status));
       if (active.length === 0) return;
-      const hidden = document.hidden;
-      await Promise.all(
-        active.map(async (j) => {
-          try {
-            const fresh = await getJob(j.id);
-            if (fresh === null) {
-              setById((p) => {
-                const n = { ...p };
-                delete n[j.id];
-                return n;
-              });
-              setOrder((p) => p.filter((x) => x !== j.id));
-              return;
+      inFlight.current = true;
+      try {
+        await Promise.all(
+          active.map(async (j) => {
+            try {
+              const fresh = await getJob(j.id);
+              if (fresh === null) {
+                setById((p) => {
+                  const n = { ...p };
+                  delete n[j.id];
+                  return n;
+                });
+                setOrder((p) => p.filter((x) => x !== j.id));
+                return;
+              }
+              // The job may have been removed while this fetch was in flight; don't
+              // re-insert it.
+              if (!(j.id in byIdRef.current)) return;
+              setById((p) => (j.id in p ? { ...p, [j.id]: fresh } : p));
+              const prev = lastStatus.current[j.id];
+              lastStatus.current[j.id] = fresh.status;
+              // First sight of a rehydrated job: seed lastStatus without toasting, so a
+              // job that finished in a previous session doesn't re-toast on reload.
+              const firstSightOfRehydrated = prev === undefined && rehydrated.current.has(j.id);
+              if (isTerminal(fresh.status) && prev !== fresh.status && !firstSightOfRehydrated) {
+                if (fresh.status === "done") onToastRef.current("done", fresh);
+                else if (fresh.status === "error") onToastRef.current("error", fresh);
+                else if (fresh.status === "cancelled") onToastRef.current("cancelled", fresh);
+              }
+            } catch {
+              /* transient network error; retry next tick */
             }
-            setById((p) => ({ ...p, [j.id]: fresh }));
-            const prev = lastStatus.current[j.id];
-            lastStatus.current[j.id] = fresh.status;
-            // First sight of a rehydrated job: seed lastStatus without toasting, so a
-            // job that finished in a previous session doesn't re-toast on reload.
-            const firstSightOfRehydrated = prev === undefined && rehydrated.current.has(j.id);
-            if (isTerminal(fresh.status) && prev !== fresh.status && !firstSightOfRehydrated) {
-              if (fresh.status === "done") onToastRef.current("done", fresh);
-              else if (fresh.status === "error") onToastRef.current("error", fresh);
-            }
-          } catch {
-            /* transient network error; retry next tick */
-          }
-        }),
-      );
-      void hidden;
+          }),
+        );
+      } finally {
+        inFlight.current = false;
+      }
     };
     const iv = setInterval(tick, 1000);
     return () => clearInterval(iv);

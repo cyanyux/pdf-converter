@@ -28,8 +28,18 @@ export const config = {
   maxFilesPerRequest: num("PDF_OCR_MAX_FILES", 20),
   /** Reject new jobs when the queue is at/above this depth (429). */
   maxQueueDepth: num("PDF_OCR_MAX_QUEUE", 100),
-  /** Cap on non-terminal jobs a single API key (or anon) may hold. */
-  maxActiveJobsPerKey: num("PDF_OCR_MAX_ACTIVE", 20),
+  /**
+   * Global backpressure cap on concurrent non-terminal jobs. The service uses a
+   * single shared API_KEY, so this is a whole-service ceiling — not a per-tenant /
+   * per-key quota (store.activeCount() is global).
+   */
+  maxActiveJobs: num("PDF_OCR_MAX_ACTIVE", 20),
+  /**
+   * Above this size, preflightPdf skips the in-memory pdf-lib structural parse
+   * (only checks the %PDF- magic) so a huge upload can't OOM the request handler;
+   * the worker validates such PDFs instead.
+   */
+  preflightMaxBytes: num("PDF_OCR_PREFLIGHT_MAX_MB", 100) * 1024 * 1024,
 
   /** Worker considered dead if its heartbeat is older than this. */
   workerStaleSeconds: num("PDF_OCR_WORKER_STALE_S", 30),
@@ -43,7 +53,5 @@ export function isExposedBind(host: string): boolean {
   return host !== "127.0.0.1" && host !== "localhost" && host !== "::1";
 }
 
-/** Digital Office formats convertible to Markdown (PaddleOCR doc2md). */
-export const OFFICE_EXTS = [".docx", ".xlsx", ".pptx"] as const;
 /** Everything the upload endpoint accepts. */
-export const ACCEPTED_EXTS: readonly string[] = [".pdf", ...OFFICE_EXTS];
+export const ACCEPTED_EXTS: readonly string[] = [".pdf"];

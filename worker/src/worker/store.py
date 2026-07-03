@@ -42,12 +42,24 @@ class Store:
         ).fetchall()
         now = time.time()
         for row in rows:
-            if row["attempts"] + 1 > max_attempts:
-                self.conn.execute(
-                    "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
-                    ("interrupted too many times", now, row["id"]),
-                )
-                self.set_progress(row["id"], 0, 0, "error", "interrupted too many times")
+            # This recovery counts as an attempt (attempts + 1). Poison once a job has been
+            # attempted max_attempts times: with the default 3 a job runs at most 3 times
+            # (attempts 0,1,2) before it is failed. `>=`, not `>` — `>` would grant one extra
+            # run than MAX_ATTEMPTS names (see test_store.py's attempts=2 boundary tests).
+            if row["attempts"] + 1 >= max_attempts:
+                # Poison pill: two statements (jobs -> error, progress row), so wrap
+                # each row's change in its own txn — a TS reader never sees a torn state.
+                self.conn.execute("BEGIN IMMEDIATE")
+                try:
+                    self.conn.execute(
+                        "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
+                        ("interrupted too many times", now, row["id"]),
+                    )
+                    self._progress_stmts(row["id"], 0, 0, "error", "interrupted too many times")
+                    self.conn.execute("COMMIT")
+                except Exception:
+                    self.conn.execute("ROLLBACK")
+                    raise
             else:
                 self.conn.execute(
                     "UPDATE jobs SET status='queued', attempts=attempts+1, heartbeat_at=NULL, updated_at=? WHERE id=?",
@@ -88,12 +100,20 @@ class Store:
         if row["status"] in ("done", "error", "cancelled"):
             return False
         now = time.time()
-        if row["attempts"] + 1 > max_attempts:
-            self.conn.execute(
-                "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
-                (reason, now, job_id),
-            )
-            self.set_progress(job_id, 0, 0, "error", reason)
+        # Same boundary as reap(): this crash counts as an attempt; fail once the job has
+        # been attempted max_attempts times (default 3 -> at most 3 runs). See reap().
+        if row["attempts"] + 1 >= max_attempts:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(
+                    "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
+                    (reason, now, job_id),
+                )
+                self._progress_stmts(job_id, 0, 0, "error", reason)
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
             return False
         self.conn.execute(
             "UPDATE jobs SET status='queued', attempts=attempts+1, heartbeat_at=NULL, updated_at=? WHERE id=?",
@@ -111,7 +131,12 @@ class Store:
 
     # ---- child / pipeline ----
 
-    def set_progress(self, job_id: str, current: int, total: int, status: str, message: str) -> None:
+    def _progress_stmts(self, job_id: str, current: int, total: int, status: str, message: str) -> None:
+        """The progress upsert + heartbeat bump, WITHOUT a surrounding transaction.
+
+        Call this from within an already-open BEGIN...COMMIT (set_result/set_error/
+        set_cancelled/reap) so the jobs.status change and its progress row commit
+        atomically. set_progress() wraps this as its own single-shot autocommit."""
         percent = min(100, int(current / total * 100)) if total else 0
         now = time.time()
         self.conn.execute(
@@ -123,28 +148,57 @@ class Store:
         )
         self.conn.execute("UPDATE jobs SET heartbeat_at=?, updated_at=? WHERE id=?", (now, now, job_id))
 
+    def set_progress(self, job_id: str, current: int, total: int, status: str, message: str) -> None:
+        # Standalone per-page progress from the child: stays single-shot autocommit.
+        self._progress_stmts(job_id, current, total, status, message)
+
     def set_result(self, job_id: str, download_id: str, result: dict[str, Any], done_msg: str) -> None:
         now = time.time()
-        self.conn.execute(
-            "UPDATE jobs SET status='done', result_json=?, download_id=?, updated_at=? WHERE id=?",
-            (json.dumps(result), download_id, now, job_id),
-        )
         total = int(result.get("totalPages", 0)) or 1
-        self.set_progress(job_id, total, total, "done", done_msg)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                "UPDATE jobs SET status='done', result_json=?, download_id=?, updated_at=? WHERE id=?",
+                (json.dumps(result), download_id, now, job_id),
+            )
+            self._progress_stmts(job_id, total, total, "done", done_msg)
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def set_error(self, job_id: str, message: str) -> None:
-        self.conn.execute(
-            "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
-            (message, time.time(), job_id),
-        )
-        self.set_progress(job_id, 0, 0, "error", message)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute(
+                "UPDATE jobs SET status='error', error=?, updated_at=? WHERE id=?",
+                (message, time.time(), job_id),
+            )
+            self._progress_stmts(job_id, 0, 0, "error", message)
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def set_cancelled(self, job_id: str, message: str) -> None:
-        self.conn.execute("UPDATE jobs SET status='cancelled', updated_at=? WHERE id=?", (time.time(), job_id))
-        self.set_progress(job_id, 0, 0, "cancelled", message)
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            self.conn.execute("UPDATE jobs SET status='cancelled', updated_at=? WHERE id=?", (time.time(), job_id))
+            self._progress_stmts(job_id, 0, 0, "cancelled", message)
+            self.conn.execute("COMMIT")
+        except Exception:
+            self.conn.execute("ROLLBACK")
+            raise
 
     def status_of(self, job_id: str) -> str | None:
         row = self.conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return row["status"] if row else None
+
+    def progress_status(self, job_id: str) -> str | None:
+        """The progress-row status ('processing' during recognition, 'saving'/'converting'
+        during the opaque post-recognition save phase). The watchdog reads it to choose a
+        strict vs. lenient idle timeout."""
+        row = self.conn.execute("SELECT status FROM progress WHERE job_id=?", (job_id,)).fetchone()
         return row["status"] if row else None
 
     def job_heartbeat_at(self, job_id: str) -> float | None:
@@ -190,8 +244,8 @@ class Store:
             for r in self.conn.execute("SELECT DISTINCT upload_path FROM jobs WHERE upload_path IS NOT NULL").fetchall()
         }
         if uploads_dir.is_dir():
-            # Sweep EVERY upload, not just *.pdf: Office uploads land as <uuid>.docx/
-            # .xlsx/.pptx (and unknown types as .bin), and would otherwise leak forever.
+            # Sweep EVERY upload, not just *.pdf: an unsupported upload can briefly land as
+            # <uuid>.bin before the server rejects it, and would otherwise leak forever.
             for f in uploads_dir.iterdir():
                 if not f.is_file():
                     continue

@@ -20,14 +20,28 @@ from . import config
 log = logging.getLogger("worker.models")
 
 
+def _norm_device() -> str:
+    """Normalized device string (mirrors paddle's own case-insensitive parsing)."""
+    return config.DEVICE.strip().lower()
+
+
+def _is_cpu(dev: str) -> bool:
+    """True for 'cpu' / 'cpu:N' — matches how DEVICE selects the CPU path."""
+    return dev == "cpu" or dev.startswith("cpu")
+
+
+def _gpu_target(dev: str) -> str:
+    """Concrete GPU device string for a normalized, non-CPU DEVICE."""
+    return "gpu:0" if dev in ("", "auto", "gpu", "cuda") else dev
+
+
 def set_device() -> bool:
     """Select the runtime device; returns True if on GPU."""
-    dev = config.DEVICE.strip().lower()
-    if dev == "cpu" or not paddle.is_compiled_with_cuda():
-        paddle.set_device("cpu")
+    dev = _norm_device()
+    if _is_cpu(dev) or not paddle.is_compiled_with_cuda():  # type: ignore[attr-defined]
+        paddle.set_device("cpu")  # type: ignore[attr-defined]
         return False
-    target = "gpu:0" if dev in ("", "auto", "gpu", "cuda") else dev
-    paddle.set_device(target)
+    paddle.set_device(_gpu_target(dev))  # type: ignore[attr-defined]
     return True
 
 
@@ -70,7 +84,9 @@ def build_ocr() -> Any:
     """
     from paddleocr import PaddleOCR
 
-    on_gpu = config.DEVICE != "cpu" and paddle.is_compiled_with_cuda()
+    dev = _norm_device()
+    on_gpu = not _is_cpu(dev) and paddle.is_compiled_with_cuda()  # type: ignore[attr-defined]
+    device = "cpu" if _is_cpu(dev) else _gpu_target(dev)
     kwargs: dict[str, Any] = {
         "ocr_version": config.OCR_VERSION,
         "use_doc_orientation_classify": False,
@@ -80,7 +96,7 @@ def build_ocr() -> Any:
         "text_det_limit_side_len": 960,
         "text_det_thresh": 0.25,
         "text_det_box_thresh": 0.5,
-        "device": config.DEVICE,
+        "device": device,
     }
 
     # Preferred: direct ONNX Runtime engine (the only backend that speeds up PP-OCRv6).
@@ -108,14 +124,17 @@ def build_vl() -> Any:
     """PaddleOCR-VL v1.6 for document parsing (markdown / word)."""
     from paddleocr import PaddleOCRVL
 
+    # Normalize DEVICE exactly as set_device()/build_ocr() do, so VL and PP-OCR resolve the
+    # same device string for every accepted PDF_OCR_DEVICE spelling ('gpu', 'cuda', 'auto',
+    # '', ' gpu:0 '); passing raw config.DEVICE would desync VL from the PP-OCR path.
+    dev = _norm_device()
     kwargs: dict[str, Any] = {
         "use_doc_orientation_classify": False,
         "use_doc_unwarping": False,
-        "device": config.DEVICE,
+        "device": "cpu" if _is_cpu(dev) else _gpu_target(dev),
     }
-    backend = config.__dict__.get("VL_REC_BACKEND")
-    if backend:
-        kwargs["vl_rec_backend"] = backend
+    if config.VL_REC_BACKEND:
+        kwargs["vl_rec_backend"] = config.VL_REC_BACKEND
     log.info("building PaddleOCR-VL")
     return PaddleOCRVL(**kwargs)
 

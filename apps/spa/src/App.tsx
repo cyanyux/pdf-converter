@@ -1,18 +1,13 @@
-import { type Job, LOCALES, type Locale, type Mode } from "@pdf-ocr/shared";
+import { type Job, type Mode } from "@pdf-ocr/shared";
 import { type ReactElement, useCallback, useRef, useState } from "react";
 import { JobCard } from "./components/JobCard.tsx";
+import { LanguageMenu } from "./components/LanguageMenu.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { fetchPreview, triggerDownload } from "./lib/api.ts";
 import { fileKey, formatSize } from "./lib/format.ts";
 import { useI18n } from "./lib/i18n.tsx";
 import { type ToastKind, useJobStore } from "./lib/jobs.ts";
 import { useToast } from "./lib/toast.tsx";
-
-const LOCALE_LABEL: Record<Locale, string> = {
-  "zh-TW": "繁體中文",
-  "zh-CN": "简体中文",
-  en: "English",
-};
 
 const FORMATS: { mode: Mode; titleKey: string; descKey: string; cls: string }[] = [
   { mode: "pdf", titleKey: "fmt_pdf", descKey: "fmt_pdf_desc", cls: "pdf" },
@@ -85,12 +80,13 @@ const DROP_ZONE_ICON = (
 );
 
 export function App() {
-  const { t, locale, setLocale } = useI18n();
+  const { t, locale } = useI18n();
   const show = useToast();
 
   const onToast = useCallback(
     (kind: ToastKind, job: Job) => {
       if (kind === "done") show(t("toast_done"));
+      else if (kind === "cancelled") show(t("toast_cancelled"));
       else show(t("toast_failed", { error: job.error || "" }));
     },
     [show, t],
@@ -115,7 +111,7 @@ export function App() {
       const seen = new Set(prev.map(fileKey));
       const next = [...prev];
       for (const f of Array.from(list)) {
-        const isSupported = /\.(pdf|docx|xlsx|pptx)$/i.test(f.name) || f.type === "application/pdf";
+        const isSupported = /\.pdf$/i.test(f.name) || f.type === "application/pdf";
         if (isSupported && !seen.has(fileKey(f))) {
           seen.add(fileKey(f));
           next.push(f);
@@ -170,19 +166,7 @@ export function App() {
 
   return (
     <div className="container">
-      <div className="lang-switcher">
-        <select
-          value={locale}
-          onChange={(e) => setLocale(e.target.value as Locale)}
-          aria-label="Language"
-        >
-          {LOCALES.map((l) => (
-            <option key={l} value={l}>
-              {LOCALE_LABEL[l]}
-            </option>
-          ))}
-        </select>
-      </div>
+      <LanguageMenu />
 
       <header className="header">
         <h1>{t("title")}</h1>
@@ -210,7 +194,7 @@ export function App() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pdf,.docx,.xlsx,.pptx"
+          accept=".pdf,application/pdf"
           multiple
           hidden
           onChange={(e) => addFiles(e.target.files)}

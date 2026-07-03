@@ -28,5 +28,15 @@ if [ "$GPU_OK" = "1" ] && [ "${PDF_OCR_ENABLE_HPI:-0}" = "1" ] && [ ! -f "$HPI_M
   fi
 fi
 
+# --- Fail closed on missing auth ---
+# The container is internet-exposed (cloudflared tunnel), so refuse to start an
+# unauthenticated server unless the operator explicitly opts out for local-only use.
+if [ -z "${API_KEY:-}" ] && [ "${PDF_OCR_ALLOW_NO_AUTH:-0}" != "1" ]; then
+  echo "FATAL: API_KEY is not set. The container serves an internet-exposed API and refuses" >&2
+  echo "       to start unauthenticated. Set API_KEY, or set PDF_OCR_ALLOW_NO_AUTH=1 to" >&2
+  echo "       explicitly allow an open server (local/trusted networks only)." >&2
+  exit 1
+fi
+
 # Model weights (~2 GB) download on first job and are cached in the /root/.paddlex volume.
 exec supervisord -c /app/supervisord.conf

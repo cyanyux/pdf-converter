@@ -29,10 +29,12 @@ jobs:
       - run: uv venv --python 3.12 worker/.venv
       # Worker unit tests are GPU-free: no paddle / pymupdf needed.
       - name: Install worker test deps
-        run: uv pip install --python worker/.venv ruff==0.15.20 pytest==9.1.1 beautifulsoup4==4.15.0
+        run: uv pip install --python worker/.venv ruff==0.15.20 mypy==2.1.0 pytest==9.1.1 beautifulsoup4==4.15.0
       - name: Lint + format check
         run: |
           worker/.venv/bin/ruff check worker/src worker/tests
           worker/.venv/bin/ruff format --check worker/src worker/tests
+      - name: Type-check (mypy)
+        run: cd worker && .venv/bin/mypy src
       - name: pytest (unit; no GPU)
         run: cd worker && PYTHONPATH=src .venv/bin/pytest

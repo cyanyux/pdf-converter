@@ -58,6 +58,56 @@ def test_reaper_fails_poison_pill(tmp_path: Path) -> None:
     assert s.status_of("j3") == "error"
 
 
+def test_reaper_poisons_at_attempts_boundary(tmp_path: Path) -> None:
+    # attempts=2 with max=3: this recovery would be the 3rd run, so it must poison, not
+    # requeue. Locks the `>=` boundary — the old `>` requeued here (a silent 4th attempt).
+    s = _store(tmp_path)
+    old = time.time() - 10_000
+    s.conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,heartbeat_at,attempts,created_at,updated_at) "
+        "VALUES('j4','vl','d.pdf','en','processing',?,2,?,?)",
+        (old, old, old),
+    )
+    s.reap(stale_s=120, max_attempts=3)
+    assert s.status_of("j4") == "error"
+
+
+def test_reaper_requeues_below_boundary(tmp_path: Path) -> None:
+    # attempts=1 with max=3: still under the cap -> requeue (attempts becomes 2).
+    s = _store(tmp_path)
+    old = time.time() - 10_000
+    s.conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,heartbeat_at,attempts,created_at,updated_at) "
+        "VALUES('j5','vl','e.pdf','en','processing',?,1,?,?)",
+        (old, old, old),
+    )
+    s.reap(stale_s=120, max_attempts=3)
+    row = s.conn.execute("SELECT status, attempts FROM jobs WHERE id='j5'").fetchone()
+    assert row["status"] == "queued" and row["attempts"] == 2
+
+
+def test_requeue_attempts_boundary(tmp_path: Path) -> None:
+    # requeue() shares reap()'s poison boundary: attempts=1 -> requeued (True); =2 -> fail.
+    s = _store(tmp_path)
+    now = time.time()
+    s.conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,attempts,created_at,updated_at) "
+        "VALUES('r1','pdf','a.pdf','en','processing',1,?,?)",
+        (now, now),
+    )
+    assert s.requeue("r1", max_attempts=3, reason="crash") is True
+    row = s.conn.execute("SELECT status, attempts FROM jobs WHERE id='r1'").fetchone()
+    assert row["status"] == "queued" and row["attempts"] == 2
+
+    s.conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,attempts,created_at,updated_at) "
+        "VALUES('r2','pdf','b.pdf','en','processing',2,?,?)",
+        (now, now),
+    )
+    assert s.requeue("r2", max_attempts=3, reason="crash") is False
+    assert s.status_of("r2") == "error"
+
+
 def test_upload_refcount(tmp_path: Path) -> None:
     s = _store(tmp_path)
     now = time.time()
