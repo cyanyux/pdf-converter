@@ -46,7 +46,7 @@ function fileResponse(path: string, downloadName: string, mime: string): Respons
 export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
   const app = new Hono<Env>();
 
-  app.use("/api/*", apiKeyAuth());
+  app.use("/api/*", apiKeyAuth(["/api/v1/health"]));
   app.use(
     "/api/v1/jobs",
     rateLimiter({
@@ -88,19 +88,31 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
       await stream.writeSSE({ event: "job", data: JSON.stringify(initial) });
       if (isTerminal(initial.status)) return;
       await new Promise<void>((resolve) => {
-        const unsub = hub.subscribe((snap) => {
-          const done = snap.completed.get(id);
-          const job = done ?? snap.active.get(id);
-          if (job) void stream.writeSSE({ event: "job", data: JSON.stringify(job) });
-          if (done) {
-            unsub();
-            resolve();
-          }
-        });
-        stream.onAbort(() => {
+        let settled = false;
+        let unsub = () => {};
+        const finish = () => {
+          if (settled) return;
+          settled = true;
           unsub();
           resolve();
-        });
+        };
+        // Look the job up fresh on every tick instead of trusting the hub's
+        // active/completed diff: a job that finishes before it is ever observed in an
+        // `active` tick (the sub-first-tick race) never lands in `completed`, which
+        // would leave this stream hanging open until the client aborts.
+        const emit = () => {
+          const job = store.get(id);
+          if (job) void stream.writeSSE({ event: "job", data: JSON.stringify(job) });
+          if (!job || isTerminal(job.status)) finish();
+        };
+        unsub = hub.subscribe(emit);
+        stream.onAbort(finish);
+        // Close the race window between the initial get() above and subscribe().
+        const now = store.get(id);
+        if (!now || isTerminal(now.status)) {
+          if (now) void stream.writeSSE({ event: "job", data: JSON.stringify(now) });
+          finish();
+        }
       });
     });
   });
@@ -192,6 +204,15 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
         await unlink(f.path).catch(() => {});
         skipped.push({ filename: f.filename, reason: "unsupported" });
       }
+    }
+
+    if (parsed.filesLimitHit) {
+      // Files past the per-request cap are dropped by busboy before they ever reach
+      // parsed.files; surface that instead of letting them vanish silently.
+      skipped.push({
+        filename: "(additional files)",
+        reason: `too_many_files (max ${config.maxFilesPerRequest} per request)`,
+      });
     }
 
     if (created.length === 0) return c.json({ error: "no_valid_files", skipped }, 400);

@@ -78,8 +78,14 @@ class Store:
 
     def requeue(self, job_id: str, max_attempts: int, reason: str) -> bool:
         """After a child crash: requeue if under the attempt cap, else fail. Returns requeued?"""
-        row = self.conn.execute("SELECT attempts FROM jobs WHERE id=?", (job_id,)).fetchone()
+        row = self.conn.execute("SELECT attempts, status FROM jobs WHERE id=?", (job_id,)).fetchone()
         if row is None:
+            return False
+        # Never resurrect a job that already reached a terminal state: a child can
+        # write its result(s) and then die before emitting @@DONE, in which case the
+        # supervisor sees DEAD and calls requeue on an already-'done' job. Clobbering
+        # it back to 'queued'/'error' would lose a downloadable result.
+        if row["status"] in ("done", "error", "cancelled"):
             return False
         now = time.time()
         if row["attempts"] + 1 > max_attempts:
@@ -141,6 +147,12 @@ class Store:
         row = self.conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
         return row["status"] if row else None
 
+    def job_heartbeat_at(self, job_id: str) -> float | None:
+        """Last time the child advanced this job (claim + every set_progress). The
+        supervisor watchdog compares it against JOB_IDLE_TIMEOUT_S to spot a wedged child."""
+        row = self.conn.execute("SELECT heartbeat_at FROM jobs WHERE id=?", (job_id,)).fetchone()
+        return row["heartbeat_at"] if row else None
+
     def is_cancel_requested(self, job_id: str) -> bool:
         return self.status_of(job_id) in ("cancel_requested", "cancelled")
 
@@ -178,6 +190,10 @@ class Store:
             for r in self.conn.execute("SELECT DISTINCT upload_path FROM jobs WHERE upload_path IS NOT NULL").fetchall()
         }
         if uploads_dir.is_dir():
-            for f in uploads_dir.glob("*.pdf"):
+            # Sweep EVERY upload, not just *.pdf: Office uploads land as <uuid>.docx/
+            # .xlsx/.pptx (and unknown types as .bin), and would otherwise leak forever.
+            for f in uploads_dir.iterdir():
+                if not f.is_file():
+                    continue
                 if str(f) not in referenced and (now - f.stat().st_mtime) > job_max_age_s:
                     f.unlink(missing_ok=True)

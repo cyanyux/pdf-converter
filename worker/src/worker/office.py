@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +48,14 @@ def process(store: Store, job: dict[str, Any]) -> None:
     # doc2md emits HTML tables; process_markdown converts them to Markdown + S->T.
     md = process_markdown(result.markdown, out_dir, locale, images=True)
     (out_dir / f"{jid}.md").write_text(md, encoding="utf-8")
+
+    # Honor a cancel that arrived during the (uninterruptible) conversion above,
+    # before committing a 'done' result the user asked to abort. Office was the only
+    # job path with no cancellation check.
+    if store.is_cancel_requested(jid):
+        shutil.rmtree(out_dir, ignore_errors=True)
+        store.set_cancelled(jid, msg("cancelled", locale))
+        return
 
     meta = getattr(result, "metadata", None) or {}
     pages = int(meta.get("paragraph_count", 0) or 0) or 1

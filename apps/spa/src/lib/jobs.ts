@@ -43,6 +43,10 @@ export function useJobStore(locale: Locale, onToast: (kind: ToastKind, job: Job)
   const byIdRef = useRef(byId);
   byIdRef.current = byId;
   const lastStatus = useRef<Record<string, string>>({});
+  // Ids rehydrated from localStorage this session. Their first poll observation must
+  // NOT fire a toast (they may already be terminal on the server from a prior
+  // session) — only genuine in-session transitions should toast.
+  const rehydrated = useRef<Set<string>>(new Set());
   const onToastRef = useRef(onToast);
   onToastRef.current = onToast;
 
@@ -61,6 +65,7 @@ export function useJobStore(locale: Locale, onToast: (kind: ToastKind, job: Job)
       }
       setById(rec);
       setOrder(ord);
+      rehydrated.current = new Set(ord);
     } catch {
       /* ignore corrupt storage */
     }
@@ -95,8 +100,12 @@ export function useJobStore(locale: Locale, onToast: (kind: ToastKind, job: Job)
               return;
             }
             setById((p) => ({ ...p, [j.id]: fresh }));
-            if (isTerminal(fresh.status) && lastStatus.current[j.id] !== fresh.status) {
-              lastStatus.current[j.id] = fresh.status;
+            const prev = lastStatus.current[j.id];
+            lastStatus.current[j.id] = fresh.status;
+            // First sight of a rehydrated job: seed lastStatus without toasting, so a
+            // job that finished in a previous session doesn't re-toast on reload.
+            const firstSightOfRehydrated = prev === undefined && rehydrated.current.has(j.id);
+            if (isTerminal(fresh.status) && prev !== fresh.status && !firstSightOfRehydrated) {
               if (fresh.status === "done") onToastRef.current("done", fresh);
               else if (fresh.status === "error") onToastRef.current("error", fresh);
             }
@@ -133,7 +142,15 @@ export function useJobStore(locale: Locale, onToast: (kind: ToastKind, job: Job)
 
   const cancel = useCallback(async (id: string) => {
     await cancelJob(id);
-    setById((p) => (p[id] ? { ...p, [id]: { ...p[id], status: "cancelled" } } : p));
+    // Reflect the request optimistically but keep it NON-terminal so polling keeps
+    // reconciling: the server sets 'cancel_requested' for a running job (only a
+    // still-queued one becomes 'cancelled' outright), and a running job may still
+    // finish 'done' past its last cancel checkpoint.
+    setById((p) =>
+      p[id] && !isTerminal(p[id].status)
+        ? { ...p, [id]: { ...p[id], status: "cancel_requested" } }
+        : p,
+    );
   }, []);
 
   const remove = useCallback(async (id: string) => {

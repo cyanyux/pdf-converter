@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, unlink } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { HttpBindings } from "@hono/node-server";
 import busboy from "busboy";
@@ -18,6 +18,8 @@ export interface UploadedFile {
 export interface ParsedMultipart {
   fields: Record<string, string[]>;
   files: UploadedFile[];
+  /** true if the request carried more files than the per-request cap allows */
+  filesLimitHit: boolean;
 }
 
 /**
@@ -25,10 +27,7 @@ export interface ParsedMultipart {
  * whole files in memory), enforcing per-file size and file-count caps before
  * data is retained. Uses the raw Node request from @hono/node-server bindings.
  */
-export async function parseMultipart(
-  c: Context<{ Bindings: HttpBindings }>,
-): Promise<ParsedMultipart> {
-  await mkdir(config.uploadsDir, { recursive: true });
+export function parseMultipart(c: Context<{ Bindings: HttpBindings }>): Promise<ParsedMultipart> {
   const req = c.env.incoming;
   return new Promise<ParsedMultipart>((resolve, reject) => {
     let bb: busboy.Busboy;
@@ -45,9 +44,41 @@ export async function parseMultipart(
     const fields: Record<string, string[]> = {};
     const files: UploadedFile[] = [];
     const writes: Promise<void>[] = [];
+    const openStreams = new Set<ReturnType<typeof createWriteStream>>();
+    const pendingPaths = new Set<string>();
+    let filesLimitHit = false;
+    let settled = false;
+
+    // Client aborts mid-upload, busboy/stream errors: reject instead of hanging
+    // forever (Node's pipe does NOT forward a source error to the destination, so
+    // without this the resolving `close` event never fires), and delete any partial
+    // files already opened on disk.
+    const fail = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      req.unpipe(bb);
+      bb.destroy();
+      for (const ws of openStreams) ws.destroy();
+      const paths = [...pendingPaths];
+      // Destroying the streams above rejects the in-flight per-file write promises.
+      // The `close` handler that would normally await them is skipped once settled,
+      // so consume them here with allSettled (which never throws) — otherwise those
+      // rejections are unhandled and crash the process — then remove the partial
+      // files before rejecting.
+      void Promise.allSettled(writes)
+        .then(() => Promise.all(paths.map((p) => unlink(p).catch(() => {}))))
+        .finally(() => {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        });
+    };
 
     bb.on("field", (name, value) => {
       (fields[name] ??= []).push(value);
+    });
+
+    // Files past the cap: busboy stops emitting `file` and fires this once.
+    bb.on("filesLimit", () => {
+      filesLimitHit = true;
     });
 
     bb.on("file", (_name, stream, info) => {
@@ -55,14 +86,18 @@ export async function parseMultipart(
       const ext = extname(info.filename || "").toLowerCase();
       const safeExt = ACCEPTED_EXTS.includes(ext) ? ext : ".bin";
       const path = join(config.uploadsDir, `${randomUUID()}${safeExt}`);
+      pendingPaths.add(path);
       let truncated = false;
       stream.on("limit", () => {
         truncated = true;
       });
       const ws = createWriteStream(path);
+      openStreams.add(ws);
       writes.push(
         new Promise<void>((res, rej) => {
           ws.on("finish", () => {
+            openStreams.delete(ws);
+            pendingPaths.delete(path);
             files.push({ path, filename: info.filename || "upload.pdf", truncated });
             res();
           });
@@ -73,13 +108,32 @@ export async function parseMultipart(
       );
     });
 
-    bb.on("error", reject);
+    bb.on("error", fail);
     bb.on("close", () => {
+      if (settled) return;
       Promise.all(writes)
-        .then(() => resolve({ fields, files }))
-        .catch(reject);
+        .then(() => {
+          if (settled) return;
+          settled = true;
+          resolve({ fields, files, filesLimitHit });
+        })
+        .catch(fail);
     });
 
-    req.pipe(bb);
+    // Attach abort/error listeners BEFORE the async mkdir so an abort that arrives
+    // during it can't be missed. On a completed request `req.complete` is true; on a
+    // client abort it is false and busboy never emits `close`, so this settles us.
+    req.on("error", fail);
+    req.on("close", () => {
+      if (!req.complete) fail(new Error("request aborted before completion"));
+    });
+
+    // Ensure the uploads dir exists before piping (per-file write streams are created
+    // lazily in the `file` handler); skip the pipe if an abort already failed us.
+    mkdir(config.uploadsDir, { recursive: true })
+      .then(() => {
+        if (!settled) req.pipe(bb);
+      })
+      .catch(fail);
   });
 }

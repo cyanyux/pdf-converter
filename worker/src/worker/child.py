@@ -93,42 +93,54 @@ def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
             store.set_cancelled(jid, msg("cancelled", locale))
         return
 
+    # Each export commits (or fails) INDEPENDENTLY. A failure must not bubble out of
+    # run_vl_job: main()'s generic handler would set_error() on the CLAIMED job id and
+    # clobber a sibling export that already reached 'done' (data loss). Per-job try
+    # keeps the failure scoped to the job whose save actually failed.
     if "markdown" in modes:
         mj = modes["markdown"]
         if store.is_cancel_requested(mj["id"]):
             store.set_cancelled(mj["id"], msg("cancelled", locale))
         else:
-            r = docparse.save_markdown(restructured, config.OUTPUTS_DIR / mj["id"], mj["id"], locale)
-            store.set_result(
-                mj["id"],
-                mj["id"],
-                {
-                    "totalPages": total,
-                    "downloadId": mj["id"],
-                    "imagesCount": len(r["images"]),
-                    "originalName": mj["filename"],
-                },
-                msg("done", locale),
-            )
+            try:
+                r = docparse.save_markdown(restructured, config.OUTPUTS_DIR / mj["id"], mj["id"], locale)
+                store.set_result(
+                    mj["id"],
+                    mj["id"],
+                    {
+                        "totalPages": total,
+                        "downloadId": mj["id"],
+                        "imagesCount": len(r["images"]),
+                        "originalName": mj["filename"],
+                    },
+                    msg("done", locale),
+                )
+            except Exception as e:
+                log.exception("markdown export failed for %s", mj["id"])
+                store.set_error(mj["id"], str(e))
 
     if "word" in modes:
         wj = modes["word"]
         if store.is_cancel_requested(wj["id"]):
             store.set_cancelled(wj["id"], msg("cancelled", locale))
         else:
-            store.set_progress(wj["id"], total, total, "converting", msg("converting_word", locale))
-            r = docparse.save_word(restructured, config.OUTPUTS_DIR / wj["id"], wj["id"], locale)
-            store.set_result(
-                wj["id"],
-                wj["id"],
-                {
-                    "totalPages": total,
-                    "downloadId": wj["id"],
-                    "imagesCount": r["images_count"],
-                    "originalName": wj["filename"],
-                },
-                msg("done", locale),
-            )
+            try:
+                store.set_progress(wj["id"], total, total, "converting", msg("converting_word", locale))
+                r = docparse.save_word(restructured, config.OUTPUTS_DIR / wj["id"], wj["id"], locale)
+                store.set_result(
+                    wj["id"],
+                    wj["id"],
+                    {
+                        "totalPages": total,
+                        "downloadId": wj["id"],
+                        "imagesCount": r["images_count"],
+                        "originalName": wj["filename"],
+                    },
+                    msg("done", locale),
+                )
+            except Exception as e:
+                log.exception("word export failed for %s", wj["id"])
+                store.set_error(wj["id"], str(e))
 
 
 def main() -> None:
