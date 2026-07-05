@@ -100,11 +100,3 @@ For verified extractions with a QA loop, use the `/pdf-converter` skill
   Docling child produces ONLY its claimed job; a VL child declines markdown siblings
   destined for Docling (pinned via `engine` or probe-routed). Cancellation always
   resolves the whole group.
-
-## Agent coordination
-
-- Use Fable for planning and coordination. For anything you can scope into a clean subtask, start a Opus 4.8 xHigh subagent.
-
-- Give each subagent a clear goal, the relevant context, and what to bring back. Don't have them invent the plan. Run independent pieces in parallel.
-
-- When they return, review the results before you merge anything. If something's off, rewrite the brief and spin another, don't silently patch over it yourself unless it's trivial.
