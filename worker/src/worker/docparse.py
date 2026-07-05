@@ -2,14 +2,15 @@
 
 One VL pass serves both markdown and word for a dual-export group. VL input
 resolution is capped (max_pixels + render downscale) to bound VRAM, with an
-OOM -> downscale-and-retry guard. DOCX uses native save_to_word + docxcompose
-by default; pandoc is the fallback.
+OOM -> downscale-and-retry guard. DOCX is built natively via save_to_word +
+docxcompose.
 """
 
 from __future__ import annotations
 
 import logging
-import subprocess
+import re
+import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -19,13 +20,60 @@ import pymupdf as fitz
 
 from . import config
 from .i18n import msg
-from .postprocess import fix_word_styles, merge_docx, process_markdown
+from .postprocess import (
+    apply_word_heading_styles,
+    apply_word_table_merges,
+    drain_word_table_merge_specs,
+    finalize_docx_text,
+    fix_word_styles,
+    merge_docx,
+    process_markdown,
+    reset_word_table_merge_specs,
+    word_table_grid,
+)
 from .searchable_pdf import Cancelled, pixmap_to_numpy
+from .text_utils import fix_ocr_text
 
 log = logging.getLogger("worker.docparse")
 
+
+def _patch_paddlex_word_table() -> None:
+    """Make PaddleX's native DOCX writer honor table rowspan/colspan.
+
+    Its `_parse_html_table` ignores them and pads short (merged-cell continuation) rows at the
+    end, shifting their content one column left (unfixed in paddlex 3.7.2 / upstream main). We
+    swap in a rowspan-aware parser. Guarded + idempotent: if the symbol is gone (upstream
+    refactor/fix), we leave it alone rather than crash the word export."""
+    try:
+        from paddlex.inference.common.result.converter import word_converter as wc
+    except Exception as e:
+        log.warning("could not patch PaddleX word-table parser: %s", e)
+        return
+    if getattr(wc, "_pdfocr_rowspan_patched", False) or not hasattr(wc, "_parse_html_table"):
+        return
+    wc._parse_html_table = word_table_grid
+    wc._pdfocr_rowspan_patched = True
+
+
 ProgressCb = Callable[[int, int, str, str], None]
 CancelCb = Callable[[], bool]
+# Extensions counted as extracted images (raster + svg + the .bin data-URI fallback).
+_IMAGE_EXTS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "bin"}
+
+
+def reset_output_dir(out_dir: Path) -> None:
+    """Wipe + recreate a markdown job's output dir (requeue safety).
+
+    A requeued attempt must not glob-merge stale .md / images a prior (crashed) attempt left
+    behind. Only one job's save writes here, so wiping is safe. Shared by both markdown pipelines
+    (VL save_markdown + the digital Docling path)."""
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+
+def list_images(out_dir: Path) -> list[Path]:
+    """Every extracted image file under out_dir (by _IMAGE_EXTS). Shared by both markdown paths."""
+    return [p for p in out_dir.glob("**/*") if p.is_file() and p.suffix.lstrip(".").lower() in _IMAGE_EXTS]
 
 
 def _render_page(page: fitz.Page, zoom: float, max_pixels: int) -> np.ndarray:
@@ -108,7 +156,7 @@ def run_vl(
 
 
 def save_markdown(restructured: list[Any], out_dir: Path, download_id: str, locale: str | None) -> dict[str, Any]:
-    out_dir.mkdir(parents=True, exist_ok=True)
+    reset_output_dir(out_dir)
     for res in restructured:
         res.save_to_markdown(save_path=str(out_dir))
     md_files = sorted(out_dir.glob("*.md"))
@@ -121,73 +169,72 @@ def save_markdown(restructured: list[Any], out_dir: Path, download_id: str, loca
     for f in md_files:
         if f != final:
             f.unlink(missing_ok=True)
-    images = [p for ext in ("png", "jpg", "jpeg", "gif", "webp") for p in out_dir.glob(f"**/*.{ext}")]
+    images = list_images(out_dir)
     return {"total_pages": len(restructured), "download_id": download_id, "images": images}
 
 
 def save_word(restructured: list[Any], out_dir: Path, download_id: str, locale: str | None) -> dict[str, Any]:
+    # Recreate the dir so a requeued attempt can't merge stale per-page .docx a prior
+    # (crashed) attempt left in _docx. Only this job's save writes here, so wiping is safe.
+    shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True, exist_ok=True)
     final_docx = out_dir / f"{download_id}.docx"
-    if config.DOCX_BACKEND == "pandoc":
-        _pandoc_docx(restructured, out_dir, download_id, locale, final_docx)
-    else:
+    tmp = out_dir / "_docx"
+    tmp.mkdir(parents=True, exist_ok=True)
+    _patch_paddlex_word_table()  # honor table rowspan/colspan (PaddleX's writer drops merged cells)
+    reset_word_table_merge_specs()  # start clean; word_table_grid appends one spec per table parsed
+    try:
+        for res in restructured:
+            res.save_to_word(save_path=str(tmp))
+        docx_files = sorted(tmp.glob("*.docx"))
+        if not docx_files:
+            raise RuntimeError(msg("err_no_word", locale))
+        # Drain the per-table merge specs the patched parser recorded, IN PARSE ORDER, before the
+        # merge shuffles files around. save_to_word writes per-result .docx in `restructured` order
+        # and glob(sorted) reads them back in the same page order, so the spec order matches the
+        # final document's <w:tbl> order (apply_word_table_merges tolerates any mismatch anyway).
+        merge_specs = drain_word_table_merge_specs()
+        merge_docx(docx_files, final_docx)
+        apply_word_table_merges(final_docx, merge_specs)  # blank continuation cells -> real vMerge/gridSpan
+        fix_word_styles(final_docx)
+        # Native save_to_word bypasses process_markdown, so normalize the DOCX text itself:
+        # render inline LaTeX (all locales) + Simplified->Traditional (zh-TW only). Best-effort,
+        # mirroring fix_word_styles: text normalization is cosmetic, so an exception here must
+        # ship the un-normalized (but complete) .docx rather than hard-fail the whole export.
         try:
-            tmp = out_dir / "_docx"
-            tmp.mkdir(exist_ok=True)
-            for res in restructured:
-                res.save_to_word(save_path=str(tmp))
-            docx_files = sorted(tmp.glob("*.docx"))
-            if not docx_files:
-                raise RuntimeError("native save_to_word produced no .docx")
-            merge_docx(docx_files, final_docx)
-            fix_word_styles(final_docx)
-            # move any extracted images alongside the docx for the download bundle
-            for img in tmp.glob("imgs/*"):
-                img.replace(out_dir / img.name)
+            finalize_docx_text(final_docx, locale)
         except Exception as e:
-            log.warning("native DOCX failed (%s); falling back to pandoc", e)
-            _pandoc_docx(restructured, out_dir, download_id, locale, final_docx)
-    images = [p for ext in ("png", "jpg", "jpeg", "gif", "webp") for p in out_dir.glob(f"*.{ext}")]
+            log.warning("docx text normalization skipped: %s", e)
+        # Promote size/bold heading paragraphs to real 'Heading N' styles so Word's navigation
+        # pane / TOC see an outline (the writer ships everything as 'Normal'). Heading DEPTH
+        # comes from the SAME VL pass's markdown (the writer flattens every level to one size,
+        # so size-ranking alone yields a two-level outline): harvest {heading text: level} from
+        # each result's markdown. Both steps best-effort like the ones above: a failure ships
+        # the un-outlined (but complete) .docx rather than hard-fail.
+        try:
+            heading_levels: dict[str, int] = {}
+            for res in restructured:
+                try:
+                    md_text = res.markdown.get("markdown_texts") or ""
+                    # zh-TW jobs convert the docx text; convert the harvested headings the same
+                    # way so the normalized-text keys actually match the styled paragraphs.
+                    md_text = fix_ocr_text(md_text, locale)
+                    for m in re.finditer(r"^(#{1,6})\s+(.+?)\s*$", md_text, re.MULTILINE):
+                        key = "".join(m.group(2).split())
+                        heading_levels.setdefault(key, len(m.group(1)))
+                except Exception as e:
+                    log.debug("heading harvest skipped for one result: %s", e)
+            apply_word_heading_styles(final_docx, heading_levels)
+        except Exception as e:
+            log.warning("docx heading style pass skipped: %s", e)
+        # Images are already embedded in the .docx (word/media); the loose crops under
+        # _docx/imgs are only counted for the UI, so tally them, then drop the whole temp dir.
+        imgs_dir = tmp / "imgs"
+        images_count = sum(1 for p in imgs_dir.glob("*") if p.is_file()) if imgs_dir.is_dir() else 0
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return {
         "total_pages": len(restructured),
         "download_id": download_id,
-        "images_count": len(images),
+        "images_count": images_count,
     }
-
-
-def _pandoc_docx(
-    restructured: list[Any], out_dir: Path, download_id: str, locale: str | None, final_docx: Path
-) -> None:
-    for res in restructured:
-        res.save_to_markdown(save_path=str(out_dir))
-    md_files = sorted(out_dir.glob("*.md"))
-    md = "\n\n".join(f.read_text(encoding="utf-8") for f in md_files)
-    md = process_markdown(md, out_dir, locale, images=True)
-    md_path = out_dir / f"{download_id}_pandoc.md"
-    md_path.write_text(md, encoding="utf-8")
-    try:
-        subprocess.run(
-            [
-                "pandoc",
-                str(md_path),
-                "-o",
-                str(final_docx),
-                "--resource-path",
-                str(out_dir),
-                "--extract-media",
-                str(out_dir),
-            ],
-            check=True,
-            capture_output=True,
-            cwd=str(out_dir),
-            timeout=config.PANDOC_TIMEOUT,
-        )
-    except FileNotFoundError as e:
-        raise RuntimeError(msg("err_pandoc_missing", locale)) from e
-    except subprocess.TimeoutExpired as e:
-        raise RuntimeError(msg("err_pandoc_timeout", locale, seconds=config.PANDOC_TIMEOUT)) from e
-    except subprocess.CalledProcessError as e:
-        detail = f"{e.stdout.decode()} {e.stderr.decode()}"
-        raise RuntimeError(msg("err_pandoc_failed", locale, detail=detail)) from e
-    fix_word_styles(final_docx)
-    md_path.unlink(missing_ok=True)

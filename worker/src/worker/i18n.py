@@ -8,6 +8,11 @@ MESSAGES = {
         "zh-CN": "开始转换 {pages} 页...",
         "en": "Converting {pages} pages...",
     },
+    "converting_doc": {
+        "zh-TW": "轉換文件中…",
+        "zh-CN": "转换文件中…",
+        "en": "Converting document...",
+    },
     "processing_start": {
         "zh-TW": "開始處理 {pages} 頁...",
         "zh-CN": "开始处理 {pages} 页...",
@@ -33,16 +38,6 @@ MESSAGES = {
         "zh-CN": "保存 PDF 中...",
         "en": "Saving PDF...",
     },
-    "saving_markdown": {
-        "zh-TW": "儲存 Markdown...",
-        "zh-CN": "保存 Markdown...",
-        "en": "Saving Markdown...",
-    },
-    "processing_tables": {
-        "zh-TW": "處理表格與圖片...",
-        "zh-CN": "处理表格与图片...",
-        "en": "Processing tables and images...",
-    },
     "converting_word": {
         "zh-TW": "轉換為 Word...",
         "zh-CN": "转换为 Word...",
@@ -58,11 +53,6 @@ MESSAGES = {
         "zh-CN": "已取消",
         "en": "Cancelled",
     },
-    "waiting_queue": {
-        "zh-TW": "等待其他任務完成...",
-        "zh-CN": "等待其他任务完成...",
-        "en": "Waiting for other tasks...",
-    },
     "waiting": {
         "zh-TW": "等待中...",
         "zh-CN": "等待中...",
@@ -74,11 +64,6 @@ MESSAGES = {
         "en": "Connection timeout",
     },
     # Error messages
-    "err_open_pdf": {
-        "zh-TW": "無法開啟 PDF 檔案: {detail}",
-        "zh-CN": "无法打开 PDF 文件: {detail}",
-        "en": "Cannot open PDF file: {detail}",
-    },
     "err_encrypted_pdf": {
         "zh-TW": "無法處理加密的 PDF 檔案",
         "zh-CN": "无法处理加密的 PDF 文件",
@@ -89,30 +74,15 @@ MESSAGES = {
         "zh-CN": "PDF 文件没有页面",
         "en": "PDF file has no pages",
     },
-    "err_cancelled": {
-        "zh-TW": "已取消處理",
-        "zh-CN": "已取消处理",
-        "en": "Processing cancelled",
-    },
     "err_no_markdown": {
         "zh-TW": "VL 模型未產生 Markdown 檔案",
         "zh-CN": "VL 模型未产生 Markdown 文件",
         "en": "VL model did not produce Markdown file",
     },
-    "err_pandoc_timeout": {
-        "zh-TW": "Pandoc 轉換逾時 ({seconds} 秒)",
-        "zh-CN": "Pandoc 转换超时 ({seconds} 秒)",
-        "en": "Pandoc conversion timed out after {seconds} seconds",
-    },
-    "err_pandoc_failed": {
-        "zh-TW": "Pandoc 轉換失敗: {detail}",
-        "zh-CN": "Pandoc 转换失败: {detail}",
-        "en": "Pandoc conversion failed: {detail}",
-    },
-    "err_pandoc_missing": {
-        "zh-TW": "未安裝 Pandoc",
-        "zh-CN": "未安装 Pandoc",
-        "en": "Pandoc not installed",
+    "err_no_word": {
+        "zh-TW": "VL 模型未產生 Word 檔案",
+        "zh-CN": "VL 模型未产生 Word 文件",
+        "en": "VL model did not produce a Word file",
     },
     "err_partial_pages": {
         "zh-TW": "部分頁面處理失敗: {pages}",
