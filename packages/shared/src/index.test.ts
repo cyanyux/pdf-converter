@@ -21,6 +21,7 @@ test("Job parses a full object", () => {
     mode: "pdf",
     filename: "a.pdf",
     locale: "en",
+    engine: "auto",
     status: "queued",
     attempts: 0,
     createdAt: 1,

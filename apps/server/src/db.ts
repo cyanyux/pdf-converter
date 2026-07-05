@@ -2,7 +2,15 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Job, JobResult, JobStatus, Locale, Mode, Progress } from "@pdf-converter/shared";
+import type {
+  Engine,
+  Job,
+  JobResult,
+  JobStatus,
+  Locale,
+  Mode,
+  Progress,
+} from "@pdf-converter/shared";
 import { config } from "./config.ts";
 
 interface JobRow {
@@ -11,6 +19,7 @@ interface JobRow {
   mode: string;
   filename: string;
   locale: string;
+  engine: string;
   status: string;
   attempts: number;
   upload_path: string | null;
@@ -70,6 +79,7 @@ function toJob(row: JobRow, prog: ProgressRow | undefined): Job {
     mode: row.mode as Mode,
     filename: row.filename,
     locale: row.locale as Locale,
+    engine: row.engine as Engine,
     status: row.status as JobStatus,
     attempts: row.attempts,
     createdAt: row.created_at,
@@ -116,6 +126,8 @@ export interface EnqueueInput {
   mode: Mode;
   filename: string;
   locale: Locale;
+  /** requested markdown engine; the caller passes 'auto' for pdf/word rows (see app.ts) */
+  engine: Engine;
   uploadPath: string;
   groupId?: string | null;
 }
@@ -135,7 +147,52 @@ export class JobStore {
     this.db.exec("PRAGMA journal_mode=WAL");
     this.db.exec("PRAGMA busy_timeout=5000");
     this.db.exec("PRAGMA foreign_keys=ON");
-    this.db.exec(readFileSync(schemaPath, "utf8"));
+    const schemaSql = readFileSync(schemaPath, "utf8");
+    this.db.exec(schemaSql);
+    this.migrate(schemaSql);
+  }
+
+  /**
+   * Idempotent schema catch-up for a pre-existing DB, derived from schema.sql itself.
+   * schema.sql runs via CREATE TABLE IF NOT EXISTS, so a pre-existing table is never
+   * altered by the exec above — a column added to schema.sql later never lands. Rather
+   * than hand-maintaining per-column ALTERs here AND in the worker's Store._migrate (a
+   * pair that can silently drift), apply schema.sql to a throwaway in-memory DB and
+   * ALTER in whatever columns the live tables are missing. schema.sql stays the single
+   * source of truth; a new NOT NULL column just needs a DEFAULT there (SQLite can't
+   * backfill one without it — that fails loudly HERE at startup, not later at some
+   * INSERT). The worker runs the identical algorithm.
+   */
+  private migrate(schemaSql: string): void {
+    interface Col {
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }
+    const ref = new DatabaseSync(":memory:");
+    try {
+      ref.exec(schemaSql);
+      const tables = ref.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as {
+        name: string;
+      }[];
+      for (const { name: table } of tables) {
+        const have = new Set(
+          (this.db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Col[]).map(
+            (c) => c.name,
+          ),
+        );
+        for (const col of ref.prepare(`PRAGMA table_info(${table})`).all() as unknown as Col[]) {
+          if (have.has(col.name)) continue;
+          let ddl = `ALTER TABLE ${table} ADD COLUMN ${col.name} ${col.type}`;
+          if (col.notnull) ddl += " NOT NULL";
+          if (col.dflt_value != null) ddl += ` DEFAULT ${col.dflt_value}`;
+          this.db.exec(ddl);
+        }
+      }
+    } finally {
+      ref.close();
+    }
   }
 
   enqueue(input: EnqueueInput): string {
@@ -146,8 +203,8 @@ export class JobStore {
       try {
         this.db
           .prepare(
-            "INSERT INTO jobs(id,group_id,mode,filename,locale,status,upload_path,created_at,updated_at) " +
-              "VALUES(?,?,?,?,?,'queued',?,?,?)",
+            "INSERT INTO jobs(id,group_id,mode,filename,locale,engine,status,upload_path,created_at,updated_at) " +
+              "VALUES(?,?,?,?,?,?,'queued',?,?,?)",
           )
           .run(
             id,
@@ -155,6 +212,7 @@ export class JobStore {
             input.mode,
             input.filename,
             input.locale,
+            input.engine,
             input.uploadPath,
             now,
             now,

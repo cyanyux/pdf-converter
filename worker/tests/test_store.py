@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import time
 from pathlib import Path
 
@@ -259,6 +260,32 @@ def test_requeue_for_shutdown_returns_false_on_cancel_requested(tmp_path: Path) 
     )
     assert s.requeue_for_shutdown("cr") is False
     assert s.status_of("cr") == "cancel_requested"
+
+
+def test_migration_adds_engine_column_to_preexisting_db(tmp_path: Path) -> None:
+    # A DB built before the `engine` column existed has a jobs table without it; executescript's
+    # CREATE TABLE IF NOT EXISTS is a no-op there, so Store must ALTER the column in. Simulate the
+    # OLD DB by building the current schema then dropping `engine` (all other columns stay real, so
+    # schema.sql's indexes/triggers still apply cleanly); open a Store on it and confirm `engine` is
+    # re-added and defaulted to 'auto'.
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)
+    conn.executescript(SCHEMA.read_text(encoding="utf-8"))
+    conn.execute("ALTER TABLE jobs DROP COLUMN engine")
+    conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,created_at,updated_at) "
+        "VALUES('old','markdown','a.pdf','en','queued',1.0,1.0)"
+    )
+    conn.commit()
+    conn.close()
+    # Sanity: the simulated old DB really lacks the column.
+    assert "engine" not in {r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(jobs)")}
+
+    s = Store(db, SCHEMA)  # must not raise
+    row = s.conn.execute("SELECT engine FROM jobs WHERE id='old'").fetchone()
+    assert row["engine"] == "auto"
+    # Idempotent: a second open (column now present) is a no-op, still no exception.
+    Store(db, SCHEMA)
 
 
 def test_upload_refcount(tmp_path: Path) -> None:

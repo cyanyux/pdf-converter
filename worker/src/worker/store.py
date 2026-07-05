@@ -26,7 +26,40 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA busy_timeout=5000")
         self.conn.execute("PRAGMA foreign_keys=ON")
-        self.conn.executescript(schema_path.read_text(encoding="utf-8"))
+        schema_sql = schema_path.read_text(encoding="utf-8")
+        self.conn.executescript(schema_sql)
+        self._migrate(schema_sql)
+
+    def _migrate(self, schema_sql: str) -> None:
+        """Idempotent schema catch-up for a pre-existing DB, derived from schema.sql itself.
+
+        executescript applies schema.sql, but its CREATE TABLE IF NOT EXISTS is a no-op on an
+        already-created table — so a column added to schema.sql after the DB was first built
+        never lands. Rather than hand-maintaining per-column ALTERs here AND in the TS server's
+        JobStore.migrate (a pair that can silently drift), apply schema.sql to a throwaway
+        in-memory DB and ALTER in whatever columns the live tables are missing. schema.sql stays
+        the single source of truth; a new NOT NULL column just needs a DEFAULT there (SQLite
+        can't backfill one without it — that fails loudly HERE at startup, not later at some
+        INSERT). The TS server runs the identical algorithm.
+        """
+        ref = sqlite3.connect(":memory:")
+        try:
+            ref.row_factory = sqlite3.Row
+            ref.executescript(schema_sql)
+            tables = [r["name"] for r in ref.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            for table in tables:
+                have = {r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for col in ref.execute(f"PRAGMA table_info({table})"):
+                    if col["name"] in have:
+                        continue
+                    ddl = f"ALTER TABLE {table} ADD COLUMN {col['name']} {col['type']}"
+                    if col["notnull"]:
+                        ddl += " NOT NULL"
+                    if col["dflt_value"] is not None:
+                        ddl += f" DEFAULT {col['dflt_value']}"
+                    self.conn.execute(ddl)
+        finally:
+            ref.close()
 
     def close(self) -> None:
         self.conn.close()

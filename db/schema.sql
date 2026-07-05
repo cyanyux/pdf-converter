@@ -3,6 +3,11 @@
 -- WAL database file. Keep this file the single source of truth; changing a
 -- column requires updating apps/server/src/db.ts and worker/src/worker/store.py
 -- and is guarded by the schema round-trip test.
+--
+-- ADDING a column: give it a DEFAULT and just add it here — both processes
+-- auto-backfill pre-existing DBs at startup by diffing the live tables against
+-- a fresh in-memory apply of this file (JobStore.migrate / Store._migrate).
+-- A NOT NULL column without a DEFAULT fails that startup migration loudly.
 
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
@@ -13,6 +18,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   mode          TEXT NOT NULL,                 -- 'pdf' | 'markdown' | 'word'
   filename      TEXT NOT NULL,                 -- original upload filename (display only)
   locale        TEXT NOT NULL DEFAULT 'zh-TW', -- 'zh-TW' | 'zh-CN' | 'en'
+  engine        TEXT NOT NULL DEFAULT 'auto',  -- requested markdown engine: 'auto' | 'docling' | 'vl'
+                                               -- (meaningful on mode='markdown' rows; result_json.engine
+                                               -- records the engine actually used)
   status        TEXT NOT NULL DEFAULT 'queued',-- queued|processing|saving|done|error|cancelled|cancel_requested
   attempts      INTEGER NOT NULL DEFAULT 0,    -- reaper increments; poison-pill guard
   upload_path   TEXT,                          -- path to the streamed upload on the uploads volume

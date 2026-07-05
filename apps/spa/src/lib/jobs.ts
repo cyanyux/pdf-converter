@@ -19,6 +19,9 @@ function stub(p: Persisted): Job {
     mode: p.mode,
     filename: p.filename,
     locale: p.locale,
+    // Optimistic placeholder overwritten by the first real GET; the requested engine
+    // isn't persisted client-side, so 'auto' stands in for this transient stub.
+    engine: "auto",
     status: "queued",
     attempts: 0,
     createdAt: now,

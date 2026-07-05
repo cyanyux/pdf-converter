@@ -44,6 +44,24 @@ FAMILY_BY_MODE = {"pdf": "ppocr", "markdown": "vl", "word": "vl"}
 _SAVE_PHASES = ("saving", "converting")
 _stop = False
 
+# The message a pinned engine='docling' job fails with when the upload is NOT born-digital.
+# Docling runs do_ocr=False and would silently drop any raster-only content, so an ineligible
+# input must fail loudly (never fall back) — the caller resubmits with engine=vl / engine=auto.
+# The eligibility numbers are interpolated from probe's routing constants so the message can
+# never claim a threshold the router no longer uses.
+DOCLING_INELIGIBLE_MSG = (
+    f"engine=docling requires a born-digital PDF (>={probe.DIGITAL_RATIO:.0%} of pages with a "
+    "text layer, no text on raster-only pages) — this document routes to VL; resubmit with "
+    "engine=vl or engine=auto"
+)
+
+
+class DoclingIneligible(Exception):
+    """Raised by pick_family when a pinned engine='docling' markdown job is not born-digital.
+
+    Caught in the main claim loop, where it becomes a set_error + cleanup_upload for the job
+    (mirroring the already-searchable short-circuit's error handling), NOT a silent VL fallback."""
+
 
 def _handle_signal(signum: int, _frame: Any) -> None:
     global _stop
@@ -190,16 +208,40 @@ def cleanup_upload(store: Store, job: dict[str, Any]) -> None:
 
 
 def pick_family(job: dict[str, Any]) -> str:
-    """Resolve the model family for a claimed job, refining markdown at claim time.
+    """Resolve the model family for a claimed job, honouring the requested markdown engine.
 
-    pdf -> ppocr, word -> vl (fixed). markdown is routed by probe.route_markdown against the
-    upload: a born-digital PDF -> 'docling' (CPU, text-faithful), a scanned one -> 'vl'. A probe
-    failure (unreadable upload) falls back to 'vl', whose own pipeline surfaces the real error.
+    pdf -> ppocr, word -> vl (fixed). markdown obeys the job's `engine` (default 'auto'):
+      - 'vl': the VL family directly, no probe needed.
+      - 'docling': eligibility is VERIFIED — probe.route_markdown must agree the PDF is born-digital
+        ('docling'). Docling runs do_ocr=False, so an ineligible input would silently lose raster
+        content; if it routes 'vl' OR the probe raises we raise DoclingIneligible (the loop fails the
+        job) rather than ever falling back to VL.
+      - 'auto' (or missing): route by probe.route_markdown against the upload — a born-digital PDF ->
+        'docling' (CPU, text-faithful), a scanned one -> 'vl'. A probe failure (unreadable upload)
+        falls back to 'vl', whose own pipeline surfaces the real error.
     """
     base = FAMILY_BY_MODE.get(job["mode"], "vl")
     if job["mode"] != "markdown":
         return base
+    engine = job.get("engine") or "auto"
+    if engine == "vl":
+        return "vl"
     up = job.get("upload_path")
+    if engine == "docling":
+        # Pinned Docling: never guess. A missing upload and a failing probe both count as
+        # ineligible (each logged distinctly), and the job fails — no silent VL fallback.
+        if not up:
+            log.warning("pinned docling job %s has no upload_path; failing", job["id"])
+            raise DoclingIneligible(DOCLING_INELIGIBLE_MSG)
+        try:
+            route = probe.route_markdown(up)
+        except Exception as e:
+            log.warning("route_markdown probe failed for pinned docling job %s (%s); failing", job["id"], e)
+            raise DoclingIneligible(DOCLING_INELIGIBLE_MSG) from e
+        if route != "docling":
+            raise DoclingIneligible(DOCLING_INELIGIBLE_MSG)
+        return "docling"
+    # engine == 'auto': probe-route as before, falling back to VL on an unreadable upload.
     if not up:
         return "vl"
     try:
@@ -412,7 +454,16 @@ def main() -> None:
                         store.requeue(job["id"], config.MAX_ATTEMPTS, f"already-searchable copy failed: {e}")
                     continue
 
-            family = pick_family(job)
+            # A pinned engine='docling' markdown job whose upload isn't born-digital fails HERE,
+            # before any child boots (like the already-searchable short-circuit above): record the
+            # error and release the upload. Never a silent VL fallback for a pinned engine.
+            try:
+                family = pick_family(job)
+            except DoclingIneligible as e:
+                store.set_error(job["id"], str(e))
+                cleanup_upload(store, job)
+                log.info("job %s -> ERROR (engine=docling ineligible)", job["id"])
+                continue
             log.info("claimed %s (%s -> %s)", job["id"], job["mode"], family)
             try:
                 current = ensure_child(family)

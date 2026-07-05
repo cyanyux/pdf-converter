@@ -15,6 +15,17 @@ export const LOCALES = ["zh-TW", "zh-CN", "en"] as const;
 export const Locale = z.enum(LOCALES);
 export type Locale = z.infer<typeof Locale>;
 
+/**
+ * Requested markdown engine — lets a client pin routing instead of leaning on the
+ * worker's content-based probe. "auto" defers to the probe; "docling" forces the
+ * text-layer path (errors if the PDF isn't born-digital); "vl" forces PaddleOCR-VL.
+ * Governs markdown only (pdf → pp-ocrv6, word → VL are fixed). Distinct from
+ * JobResult.engine, which records the engine actually used.
+ */
+export const ENGINES = ["auto", "docling", "vl"] as const;
+export const Engine = z.enum(ENGINES);
+export type Engine = z.infer<typeof Engine>;
+
 export const JOB_STATUSES = [
   "queued",
   "processing",
@@ -67,6 +78,8 @@ export const Job = z.object({
   mode: Mode,
   filename: z.string(),
   locale: Locale,
+  /** the REQUESTED markdown engine ('auto' on pdf/word rows) — cf. result.engine (used) */
+  engine: Engine,
   status: JobStatus,
   attempts: z.number().int().nonnegative(),
   createdAt: z.number(),
@@ -82,6 +95,7 @@ export type Job = z.infer<typeof Job>;
 export const CreateJobsFields = z.object({
   modes: z.array(Mode).min(1),
   locale: Locale.default("zh-TW"),
+  engine: Engine.default("auto"),
 });
 export type CreateJobsFields = z.infer<typeof CreateJobsFields>;
 

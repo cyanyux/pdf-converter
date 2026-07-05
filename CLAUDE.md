@@ -5,7 +5,10 @@
 engine: born-digital PDFs → **Docling** (CPU, characters copied from the embedded text
 layer — never OCR'd); scanned PDFs → **PaddleOCR 3.7** (PP-OCRv6 for the searchable-PDF
 text layer, PaddleOCR-VL for Markdown/Word) on the GPU. A pdf-mode job whose input is
-already fully searchable is returned as-is (`notice: "already_searchable"`).
+already fully searchable is returned as-is (`notice: "already_searchable"`). Markdown
+routing can be pinned per job via `engine=docling|vl` (default `auto` = probe routing;
+a docling pin on a non-qualifying document fails the job rather than losing raster
+content).
 
 Architecture: a **TypeScript** monorepo (React SPA + Hono API + MCP, managed by
 **Vite+**) talking to a headless **Python worker** through a durable **SQLite**
@@ -43,12 +46,18 @@ CUDA torch must never enter the venv or the Docker image.
 The API is **async job-based**: submit → poll → download. Auth is optional
 (set `API_KEY`; send it as `Authorization: Bearer <key>` or `X-API-Key: <key>`).
 
+Endpoint: the self-hosted service listens on **port 5000** (the Docker image
+sets `PORT=5000`; a bare `vp dev` / `pnpm dev` server uses the code default
+`8000`). Point agents at its host — e.g. `http://nvidia:5000` from elsewhere on
+the LAN, or `http://127.0.0.1:5000` on the box itself. The examples below use
+`http://nvidia:5000`; override via `$PDF_CONVERTER_URL`.
+
 ### Option A — MCP (recommended for tool-using agents)
 
 A stdio MCP server exposes the service as tools. Run:
 
 ```bash
-PDF_CONVERTER_URL=http://127.0.0.1:8000 API_KEY=... node apps/server/dist/mcp-stdio.mjs
+PDF_CONVERTER_URL=http://nvidia:5000 API_KEY=... node apps/server/dist/mcp-stdio.mjs
 # (dev: `pnpm --filter server mcp`)
 ```
 
@@ -61,21 +70,22 @@ Tools: `submit_pdf(path, modes[], locale?)`, `get_job(id)`, `wait_for_job(id, ti
 Machine-readable schema at **`/openapi.json`**; Swagger UI at **`/docs`**.
 
 ```bash
-# submit (markdown + word share one VL pass when both route to VL)
+# submit (markdown + word share one VL pass when both route to VL);
+# optional -F engine=docling|vl pins the markdown engine (default auto)
 curl -F files=@doc.pdf -F modes=markdown -F modes=word -F locale=zh-TW \
-     http://127.0.0.1:8000/api/v1/jobs
+     http://nvidia:5000/api/v1/jobs
 # -> {"jobs":[{"id":"...","mode":"markdown",...},{"id":"...","mode":"word",...}]}
 
 # poll until status == "done" (or stream GET /api/v1/jobs/{id}/events)
-curl http://127.0.0.1:8000/api/v1/jobs/<id>
+curl http://nvidia:5000/api/v1/jobs/<id>
 
 # download the artifact (pdf / zip / docx by mode)
-curl -OJ http://127.0.0.1:8000/api/v1/download/<id>
+curl -OJ http://nvidia:5000/api/v1/download/<id>
 ```
 
 Job statuses: `queued → processing → saving → done` (or `error` / `cancelled`).
-For verified extractions with a QA loop, use the `/pdf-extract` skill
-(`.claude/skills/pdf-extract/`) on top of this API.
+For verified extractions with a QA loop, use the `/pdf-converter` skill
+(`.claude/skills/pdf-converter/`) on top of this API.
 
 ## Conventions
 
@@ -88,7 +98,8 @@ For verified extractions with a QA loop, use the `/pdf-extract` skill
   entrypoint warns if legacy vars are set).
 - Group invariants (markdown+word dual export): each job is saved exactly once; a
   Docling child produces ONLY its claimed job; a VL child declines markdown siblings
-  that route to Docling. Cancellation always resolves the whole group.
+  destined for Docling (pinned via `engine` or probe-routed). Cancellation always
+  resolves the whole group.
 
 ## Agent coordination
 

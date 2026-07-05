@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import type { HttpBindings } from "@hono/node-server";
 import {
   type CreateJobsResponse,
+  Engine,
   isTerminal,
   Locale,
   Mode,
@@ -204,6 +205,22 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
     }
     const modes = [...new Set(modesResult.data)];
 
+    // engine pins markdown routing (single-value field; default 'auto'). Validate before any
+    // upload is retained, same as invalid_modes: a bad value or an engine set without a
+    // markdown target must not leave files on the uploads volume.
+    const engineResult = Engine.safeParse(parsed.fields.engine?.[0] ?? "auto");
+    if (!engineResult.success) {
+      await cleanup(parsed.files);
+      return c.json({ error: "invalid_engine" }, 400);
+    }
+    const engine = engineResult.data;
+    // engine only governs markdown (pdf → pp-ocrv6, word → VL are fixed), so pinning one
+    // without asking for markdown is a client mistake, not a silent no-op.
+    if (engine !== "auto" && !modes.includes("markdown")) {
+      await cleanup(parsed.files);
+      return c.json({ error: "engine_requires_markdown_mode" }, 400);
+    }
+
     const created: CreateJobsResponse["jobs"] = [];
     const skipped: CreateJobsResponse["skipped"] = [];
 
@@ -227,10 +244,13 @@ export function createApp(store: JobStore, hub: ProgressHub): Hono<Env> {
         const groupId = dual ? randomUUID() : null;
         for (const mode of modes) {
           const gid = mode === "markdown" || mode === "word" ? groupId : null;
+          // Persist the requested engine on the markdown row only; pdf/word are fixed-route,
+          // so they always store 'auto'.
           const id = store.enqueue({
             mode,
             filename: f.filename,
             locale,
+            engine: mode === "markdown" ? engine : "auto",
             uploadPath: f.path,
             groupId: gid,
           });

@@ -1,4 +1,12 @@
-import { CreateJobsResponse, ErrorResponse, HealthResponse, Job } from "@pdf-converter/shared";
+import {
+  CreateJobsResponse,
+  ENGINES,
+  ErrorResponse,
+  HealthResponse,
+  Job,
+  LOCALES,
+  MODES,
+} from "@pdf-converter/shared";
 import { z } from "zod";
 
 /**
@@ -58,7 +66,8 @@ export function buildOpenApiDoc(): Record<string, unknown> {
           summary: "Submit PDF(s) for conversion",
           description:
             "multipart/form-data: one or more `files` (PDF), " +
-            "repeated `modes` (pdf|markdown|word), and `locale` (zh-TW|zh-CN|en). " +
+            "repeated `modes` (pdf|markdown|word), `locale` (zh-TW|zh-CN|en), and an optional " +
+            "`engine` (auto|docling|vl) that pins markdown routing. " +
             "markdown+word share one VL pass. " +
             "Returns created job ids.",
           requestBody: {
@@ -71,9 +80,21 @@ export function buildOpenApiDoc(): Record<string, unknown> {
                     files: { type: "array", items: { type: "string", format: "binary" } },
                     modes: {
                       type: "array",
-                      items: { type: "string", enum: ["pdf", "markdown", "word"] },
+                      items: { type: "string", enum: [...MODES] },
                     },
-                    locale: { type: "string", enum: ["zh-TW", "zh-CN", "en"] },
+                    locale: { type: "string", enum: [...LOCALES] },
+                    engine: {
+                      type: "string",
+                      enum: [...ENGINES],
+                      default: "auto",
+                      description:
+                        "Pins the markdown conversion engine. 'auto' (default) lets the " +
+                        "worker probe the PDF and route it; 'docling' forces the text-layer " +
+                        "path and REQUIRES a born-digital PDF (the job errors otherwise); " +
+                        "'vl' forces PaddleOCR-VL. Applies to the markdown mode only — pdf and " +
+                        "word routing is fixed — so a non-'auto' value without markdown in " +
+                        "`modes` is rejected with 400 engine_requires_markdown_mode.",
+                    },
                   },
                   required: ["files", "modes"],
                 },

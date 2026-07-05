@@ -62,6 +62,74 @@ def test_pick_family_markdown_no_upload_vl(tmp_path: Path) -> None:
     assert run.pick_family({"id": "m", "mode": "markdown", "upload_path": None}) == "vl"
 
 
+def test_pick_family_markdown_missing_engine_is_auto(tmp_path: Path) -> None:
+    # A job dict without an `engine` key routes as 'auto' (the column default): probe decides.
+    pdf = _digital_pdf(tmp_path, "auto.pdf")
+    assert run.pick_family({"id": "m", "mode": "markdown", "upload_path": pdf}) == "docling"
+
+
+def test_pick_family_markdown_engine_vl_skips_probe(tmp_path: Path) -> None:
+    # engine='vl' pins the VL family directly — no probe. Use a DIGITAL pdf that would route to
+    # 'docling' under 'auto', proving the engine wins over the probe verdict.
+    pdf = _digital_pdf(tmp_path, "pinvl.pdf")
+    assert run.pick_family({"id": "m", "mode": "markdown", "engine": "vl", "upload_path": pdf}) == "vl"
+
+
+def test_pick_family_markdown_engine_docling_qualifying(tmp_path: Path) -> None:
+    # engine='docling' on a born-digital PDF is verified eligible -> the docling family.
+    pdf = _digital_pdf(tmp_path, "pind.pdf")
+    assert run.pick_family({"id": "m", "mode": "markdown", "engine": "docling", "upload_path": pdf}) == "docling"
+
+
+def test_pick_family_markdown_engine_docling_ineligible_raises(tmp_path: Path) -> None:
+    # engine='docling' on a scanned/raster PDF (routes to VL) must NOT silently fall back — it
+    # raises DoclingIneligible with the exact user-facing message.
+    pdf = _scanned_pdf(tmp_path, "pind_scan.pdf")
+    with pytest.raises(run.DoclingIneligible) as exc:
+        run.pick_family({"id": "m", "mode": "markdown", "engine": "docling", "upload_path": pdf})
+    assert str(exc.value) == run.DOCLING_INELIGIBLE_MSG
+
+
+def test_pick_family_markdown_engine_docling_no_upload_raises(tmp_path: Path) -> None:
+    # A pinned docling job with no readable upload is ineligible too (never falls back to VL).
+    with pytest.raises(run.DoclingIneligible):
+        run.pick_family({"id": "m", "mode": "markdown", "engine": "docling", "upload_path": None})
+
+
+def test_docling_ineligible_fails_job_and_cleans_upload(tmp_path: Path) -> None:
+    # The claim-loop failure path for a pinned engine='docling' markdown job over a scanned PDF:
+    # pick_family raises DoclingIneligible, and the loop records set_error(exact message) +
+    # cleanup_upload (mirroring the already-searchable short-circuit's error handling). Drive that
+    # exact sequence against the store and assert the observable end state.
+    s = _store(tmp_path)
+    pdf = _scanned_pdf(tmp_path, "scan.pdf")
+    now = 1.0
+    s.conn.execute(
+        "INSERT INTO jobs(id,mode,filename,locale,status,engine,upload_path,created_at,updated_at) "
+        "VALUES('di','markdown','orig.pdf','en','processing','docling',?,?,?)",
+        (pdf, now, now),
+    )
+    job = {
+        "id": "di",
+        "mode": "markdown",
+        "filename": "orig.pdf",
+        "locale": "en",
+        "engine": "docling",
+        "upload_path": pdf,
+    }
+
+    with pytest.raises(run.DoclingIneligible) as exc:
+        run.pick_family(job)
+    # ... which the loop turns into set_error + cleanup_upload:
+    s.set_error(job["id"], str(exc.value))
+    run.cleanup_upload(s, job)
+
+    assert s.status_of("di") == "error"
+    row = s.conn.execute("SELECT error FROM jobs WHERE id='di'").fetchone()
+    assert row["error"] == run.DOCLING_INELIGIBLE_MSG
+    assert not Path(pdf).exists()  # the sole reference is gone -> upload unlinked
+
+
 def test_already_searchable_short_circuit_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A mode=pdf job over an all-digital PDF completes WITHOUT a child: the original upload is
     # copied to outputs/<id>/<id>.pdf and the result carries engine='none' +

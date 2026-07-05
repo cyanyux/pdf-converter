@@ -109,31 +109,49 @@ def run_docling_job(store: Store, job: dict[str, Any]) -> None:
     )
 
 
+def _co_produce_markdown_sibling(sibling: dict[str, Any], upload_path: str) -> bool:
+    """Should this VL word pass co-produce the group's markdown sibling, or leave it for its own
+    claim?
+
+    The sibling's OWN requested engine (default 'auto') decides, and takes precedence over the
+    probe:
+      - 'vl'      -> co-produce (the sibling is pinned to this very family).
+      - 'docling' -> decline: the sibling's own claim runs the docling child (or fails ineligible).
+      - 'auto'    -> probe.route_markdown the shared upload: co-produce iff it routes 'vl'. A probe
+                     failure declines — defer to the sibling's own claim, never co-produce with a
+                     guessed engine (pick_family is then the single fallback authority there).
+    """
+    engine = sibling.get("engine") or "auto"
+    if engine == "vl":
+        return True
+    if engine == "docling":
+        return False
+    try:
+        return probe.route_markdown(upload_path) == "vl"
+    except Exception:
+        return False
+
+
 def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
     group_id = job.get("group_id")
     group = store.group_jobs(group_id) if group_id else [job]
-    # Siblings share one upload_path, so probe the shared upload AT MOST ONCE per call and reuse
-    # the verdict for every sibling — and only when a markdown sibling exists at all (a solo job
-    # never consults the verdict). None means "probe failed" (see the decline rule below).
-    sibling_route: str | None = None
-    if any(g["mode"] == "markdown" and g["id"] != job["id"] for g in group):
-        try:
-            sibling_route = probe.route_markdown(job["upload_path"])
-        except Exception:
-            sibling_route = None
     # active members of the group (dual export runs VL once for md + word)
     modes: dict[str, dict[str, Any]] = {}
     for g in group:
         if g["id"] != job["id"] and g["status"] in ("done", "error", "cancelled"):
             continue
-        # A markdown sibling that routes to Docling must NOT be co-produced by this VL pass — it
-        # gets its own docling child when claimed. (The CLAIMED job is always kept: if the claimed
-        # job itself were markdown, pick_family would have sent it to the docling family, not here,
-        # so keeping it on 'vl' below is the correct engine for it.) Invariant: on probe failure,
-        # defer to the sibling's own claim — never co-produce with a guessed engine. pick_family is
-        # then the single fallback authority when the sibling is claimed on its own.
-        if g["mode"] == "markdown" and g["id"] != job["id"] and sibling_route != "vl":
-            continue  # routes to docling OR probe failed -> leave queued for its own claim
+        # A markdown sibling is co-produced by this VL pass ONLY when it is itself destined for VL —
+        # its own requested engine decides (engine='vl' -> yes; 'docling' -> no; 'auto' -> probe the
+        # shared upload, co-produce iff it routes 'vl', probe failure declines). A declined sibling
+        # gets its own docling child (or a fresh VL pass) when claimed. (The CLAIMED job is always
+        # kept: if it were markdown, pick_family would have sent it to the docling family, not here,
+        # so keeping it on 'vl' below is the correct engine for it.) Invariant: never co-produce a
+        # markdown sibling with a guessed engine — defer to its own claim, where pick_family is the
+        # single fallback authority.
+        if g["mode"] == "markdown" and g["id"] != job["id"] and not _co_produce_markdown_sibling(
+            g, job["upload_path"]
+        ):
+            continue  # engine='docling' OR routes-to-docling OR probe failed -> leave for its own claim
         modes[g["mode"]] = g
     job_ids = [g["id"] for g in modes.values()]
     locale = job["locale"]

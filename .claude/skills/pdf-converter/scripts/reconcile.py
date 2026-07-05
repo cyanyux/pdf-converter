@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
-"""Deterministic QA helpers for PDF -> Markdown extraction (pdf-extract skill).
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "pymupdf>=1.28",
+#     "opencc>=1.4",
+#     "python-docx>=1.2",
+# ]
+# ///
+"""Deterministic QA helpers for PDF -> Markdown extraction (pdf-converter skill).
 
 A born-digital PDF's embedded text layer is the character-level ground truth:
 no OCR/VLM output may disagree with it. `check` verifies that every text-layer
@@ -9,15 +17,22 @@ agent can distinguish a misread (high ratio, a few chars differ) from dropped
 content (low ratio). `probe` classifies pages digital vs raster (raster pages
 have no oracle, so QA falls back to visual sampling). `pdfcheck` hygiene-checks
 a searchable PDF's invisible text layer (extractability, NUL/control chars,
-Simplified leaks). `render` exports a page PNG for visual QA.
+Simplified leaks). `render` exports a page PNG for visual QA. (Engine choice
+needs no local tooling: the service's jobs API takes an `engine` field.)
 
 Normalization on BOTH sides: NFKC (fullwidth/halfwidth), all whitespace removed
 (CJK lines re-wrap freely in markdown), markdown syntax stripped, and optional
 OpenCC s2tw when --locale zh-TW (the service converts its output, so the layer
 must be compared in the same script).
 
-Needs: pymupdf. Optional: opencc. Run with the repo's worker/.venv/bin/python
-(has both) or any python with pymupdf installed.
+Run it with uv — the PEP 723 block above pins the deps (pymupdf, opencc,
+python-docx), so no venv or manual install is needed:
+
+    uv run scripts/reconcile.py <cmd> ...
+
+uv provisions them on first run and caches them thereafter (opencc powers
+--locale zh-TW normalization; python-docx reads .docx output). Reads only local
+files (the source PDF and the downloaded output), never the network.
 """
 
 from __future__ import annotations

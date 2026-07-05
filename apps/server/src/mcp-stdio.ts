@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { ENGINES, LOCALES, MODES as MODE_VALUES } from "@pdf-converter/shared";
 import { z } from "zod";
 
 /**
@@ -30,20 +31,29 @@ function text(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
 
-const MODES = z.array(z.enum(["pdf", "markdown", "word"])).min(1);
-const LOCALE = z.enum(["zh-TW", "zh-CN", "en"]).default("zh-TW");
+// Enum values come from the shared contract so a value added there can't silently
+// go missing from this tool surface.
+const MODES = z.array(z.enum(MODE_VALUES)).min(1);
+const LOCALE = z.enum(LOCALES).default("zh-TW");
+const ENGINE = z.enum(ENGINES).default("auto");
 
 const server = new McpServer({ name: "pdf-converter", version: "1.0.0" });
 
 server.tool(
   "submit_pdf",
-  "Submit a local PDF file for OCR conversion. modes: pdf (searchable PDF), markdown, word. Returns job id(s) to poll.",
-  { path: z.string(), modes: MODES, locale: LOCALE },
-  async ({ path, modes, locale }) => {
+  "Submit a local PDF file for OCR conversion. modes: pdf (searchable PDF), markdown, word. " +
+    "engine pins how the markdown mode is produced: 'auto' (default) lets the server probe the " +
+    "PDF and route it; 'docling' forces the exact text-layer extraction and requires a " +
+    "born-digital PDF (the job errors on a scanned one); 'vl' forces the visual PaddleOCR-VL " +
+    "model. engine applies to markdown only, so pass a non-'auto' value only when 'markdown' is " +
+    "in modes. Returns job id(s) to poll.",
+  { path: z.string(), modes: MODES, locale: LOCALE, engine: ENGINE },
+  async ({ path, modes, locale, engine }) => {
     const fd = new FormData();
     fd.append("files", new Blob([await readFile(path)]), basename(path));
     for (const m of modes) fd.append("modes", m);
     fd.append("locale", locale);
+    fd.append("engine", engine);
     const data = await api("/api/v1/jobs", { method: "POST", body: fd });
     return text(data);
   },
