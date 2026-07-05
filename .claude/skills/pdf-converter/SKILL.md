@@ -1,6 +1,6 @@
 ---
 name: pdf-converter
-description: Convert PDFs into QA-verified searchable PDF, Markdown, or Word via the networked PDF Converter service (default http://nvidia:5000), reconciling every output against the PDF's own text layer. For markdown you choose the engine — Docling (text-layer exact), PaddleOCR-VL (visual), or both compared and integrated. Use when the user wants a PDF converted or documentation extracted with fidelity guarantees, e.g. "/pdf-converter <path.pdf> modes=markdown".
+description: Convert PDFs into QA-verified searchable PDF, Markdown, or Word via the networked PDF Converter service (default http://nvidia:5000), reconciling every output against the PDF's own text layer. For markdown you choose the engine — Docling (text-layer exact), PaddleOCR-VL (visual), or both compared and integrated. Use when the user wants a PDF converted or documentation extracted with fidelity guarantees, e.g. "/pdf-converter path.pdf modes=markdown".
 ---
 
 # pdf-converter — PDF → verified outputs
