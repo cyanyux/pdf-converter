@@ -13,6 +13,11 @@ MESSAGES = {
         "zh-CN": "转换文件中…",
         "en": "Converting document...",
     },
+    "converting_page": {
+        "zh-TW": "轉換第 {current}/{total} 頁...",
+        "zh-CN": "转换第 {current}/{total} 页...",
+        "en": "Converting page {current}/{total}...",
+    },
     "processing_start": {
         "zh-TW": "開始處理 {pages} 頁...",
         "zh-CN": "开始处理 {pages} 页...",

@@ -20,10 +20,14 @@ can never touch VRAM.
 from __future__ import annotations
 
 import logging
+import queue
 import re
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+
+import pymupdf as fitz
 
 # docparse's module-level imports are numpy/pymupdf/postprocess (no paddle), so importing these
 # helpers here does NOT pull paddle at import time — the digital path stays import-light.
@@ -40,15 +44,29 @@ CancelCb = Callable[[], bool]
 _MD_IMG = re.compile(r"(!\[[^\]]*\]\()([^)]+)(\))")
 
 
-def _build_converter() -> Any:
+def _build_converter(on_page_done: Callable[[int], None]) -> Any:
     """Docling DocumentConverter for born-digital PDFs (text-faithful, no OCR).
 
     do_ocr=False (trust the text layer), TableFormer ACCURATE mode, and
     generate_picture_images=True so picture crops can be written to imgs/.
+
+    Docling's converter has no progress callback, so per-page progress is grafted on via
+    pipeline_cls: a StandardPdfPipeline subclass whose _release_page_resources — the assemble
+    stage's per-item postprocess hook, i.e. the moment a page finishes the last pipeline stage —
+    also reports the page. on_page_done runs on the assemble-stage thread, NOT the caller's
+    thread, and must never raise (an exception there kills the stage thread and wedges the
+    whole conversion): keep it to a queue put. The closure subclass is safe because the
+    pipeline cache is per-DocumentConverter instance and we build a fresh converter per job.
     """
     from docling.datamodel.base_models import InputFormat
     from docling.datamodel.pipeline_options import PdfPipelineOptions, TableFormerMode
     from docling.document_converter import DocumentConverter, PdfFormatOption
+    from docling.pipeline.standard_pdf_pipeline import StandardPdfPipeline
+
+    class _ProgressPipeline(StandardPdfPipeline):
+        def _release_page_resources(self, item: Any) -> None:
+            super()._release_page_resources(item)
+            on_page_done(item.page_no)
 
     opts = PdfPipelineOptions()
     opts.do_ocr = False
@@ -57,7 +75,11 @@ def _build_converter() -> Any:
     # docling types table_structure_options as the base class (no `.mode`), but the concrete
     # TableStructureOptions has it — set ACCURATE for faithful table extraction.
     opts.table_structure_options.mode = TableFormerMode.ACCURATE  # type: ignore[attr-defined]
-    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
+    return DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(pipeline_cls=_ProgressPipeline, pipeline_options=opts)
+        }
+    )
 
 
 def _rewrite_image_refs(md: str, imgs_dir: Path) -> str:
@@ -91,8 +113,15 @@ def run_digital_markdown(
 
     Wipes+recreates out_dir first (requeue safety: a prior crashed attempt must not leave stale
     .md / imgs behind — only this job writes here). Raises Cancelled if a cancel is requested
-    before the (single, opaque) Docling conversion begins; the conversion itself is uninterruptible,
-    so mid-convert cancels are handled by the supervisor's watchdog kill, exactly like the VL path.
+    before the Docling conversion begins; the conversion itself is uninterruptible, so
+    mid-convert cancels are handled by the supervisor's watchdog kill, exactly like the VL path.
+
+    Progress streams per page: convert() runs on a worker thread while THIS thread drains page
+    completions off a queue and reports them, so every on_progress/Store write stays on the
+    caller's thread (the child's sqlite connection is check_same_thread=True). Progress keeps
+    the save-phase status ("saving", looser SAVE_IDLE_TIMEOUT_S): the first job's model load
+    and the tail (reading order, doc assembly, markdown save) are still opaque stretches with
+    no page heartbeat, so the strict recognition timeout stays wrong for this path.
     """
     from .searchable_pdf import Cancelled
 
@@ -101,17 +130,48 @@ def run_digital_markdown(
 
     from docling_core.types.doc import ImageRefMode  # type: ignore[attr-defined]
 
-    # Emit a save-phase status so the supervisor watchdog applies the looser SAVE_IDLE_TIMEOUT_S:
-    # Docling's convert() is one opaque CPU call with no per-page hook, so there is no per-page
-    # heartbeat to keep the strict recognition timeout honest. The status also gives the SPA a
-    # live "converting" state instead of a frozen bar.
-    on_progress(0, 1, "saving", msg("converting_doc", locale))
+    with fitz.open(input_pdf) as probe_doc:
+        total = probe_doc.page_count
+
+    on_progress(0, total or 1, "saving", msg("converting_doc", locale))
 
     reset_output_dir(out_dir)
 
-    converter = _build_converter()
-    result = converter.convert(input_pdf)
-    doc = result.document
+    # None is the completion sentinel from the convert thread; ints are finished page numbers.
+    page_events: queue.SimpleQueue[int | None] = queue.SimpleQueue()
+    converter = _build_converter(page_events.put)
+
+    outcome: dict[str, Any] = {}
+
+    def _convert() -> None:
+        try:
+            outcome["result"] = converter.convert(input_pdf)
+        except BaseException as e:  # re-raised on the caller's thread below
+            outcome["error"] = e
+        finally:
+            page_events.put(None)
+
+    convert_thread = threading.Thread(target=_convert, name="docling-convert", daemon=True)
+    convert_thread.start()
+    pages_done = 0
+    while page_events.get() is not None:
+        pages_done = min(pages_done + 1, total or 1)
+        try:
+            on_progress(
+                pages_done,
+                total or 1,
+                "saving",
+                msg("converting_page", locale, current=pages_done, total=total),
+            )
+        except Exception:
+            # Progress is best-effort; a transient DB write failure must not abandon the
+            # convert thread (the loop must keep draining until the sentinel).
+            log.warning("progress write failed for page %s", pages_done, exc_info=True)
+    convert_thread.join()
+
+    if "error" in outcome:
+        raise outcome["error"]
+    doc = outcome["result"].document
     total = doc.num_pages()
 
     if should_cancel():
