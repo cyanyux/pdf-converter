@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdf-converter-worker"
+version = "0.0.0"
+description = "Headless GPU inference worker for PDF Converter (PaddleOCR 3.7 + Docling)."
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  # NOTE: paddlepaddle-gpu is installed separately from the cu126 index in the
+  # Dockerfile (it is not on PyPI): paddlepaddle-gpu==3.3.1 -i .../stable/cu126/
+  "paddleocr[doc-parser]==3.7.0",
+  "pymupdf==1.28.0",
+  "python-docx==1.2.0",
+  "docxcompose",
+  "beautifulsoup4==4.15.0",
+  "numpy>=2.3,<2.4",
+  # Simplified->Traditional (Taiwan) conversion for zh-TW output; context-aware, so it
+  # resolves the one-to-many ambiguities a static table cannot (see text_utils.fix_ocr_text).
+  "opencc==1.4.0",
+  # Render VL's inline LaTeX math/units to Unicode (see text_utils.latex_to_unicode). Already
+  # pulled in transitively by paddleocr[doc-parser]; declared here because we import it directly.
+  "pylatexenc==2.10",
+  # Docling: born-digital markdown from the PDF text layer (CPU, text-faithful) — used instead
+  # of rasterize+PaddleOCR-VL when probe.route_markdown says the PDF is digital (see docparse_digital).
+  # NOTE: docling pulls torch; torch MUST be CPU-only here (the docling child runs with the GPU
+  # hidden and never touches CUDA). In the image, torch+torchvision are installed from the PyTorch
+  # CPU index BEFORE docling so its CUDA nvidia wheels never enter the layer — see the Dockerfile.
+  "docling==2.110.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "pytest-cov==7.1.0",
+  "ruff==0.15.20",
+  "mypy==2.1.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/worker"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "PTH", "RUF"]
+# Ambiguous-unicode rules fire on legitimate CJK punctuation throughout this app.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src", "tests"]
+ignore_missing_imports = true
+# The GPU stack (pymupdf/fitz, paddle, python-docx, docxcompose) ships no type stubs, so
+# every call into it is "untyped"; flagging those is noise, not a real type signal. Keep the
+# rest of strict (untyped defs in OUR code, generics, Any-returns are still errors).
+disallow_untyped_calls = false
+# CI type-checks GPU-free (paddle/pymupdf/numpy not installed), so those modules resolve to
+# Any and the `# type: ignore[attr-defined]` on paddle device calls is unused there — while
+# locally (paddle present) it IS needed. Don't fail on that environment-dependent difference.
+warn_unused_ignores = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q"
+markers = ["gpu: requires a CUDA GPU (opt-in, not run in CI)"]

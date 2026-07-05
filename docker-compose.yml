@@ -1,20 +1,28 @@
 services:
-  pdf-ocr:
+  pdf-converter:
     build: .
-    container_name: pdf-ocr
+    container_name: pdf-converter
     runtime: nvidia
     init: true
     restart: unless-stopped
-    stop_grace_period: 30s
+    stop_grace_period: 90s
     ports:
       - "5000:5000"
     volumes:
-      - pdf-ocr-output:/tmp/pdf_ocr_output
-      - pdf-ocr-paddlex:/root/.paddlex
-      - pdf-ocr-cache:/root/.cache
+      - pdf-converter-data:/app/data # jobs db + uploads + outputs
+      - pdf-converter-paddlex:/root/.paddlex # model weights cache
+      - pdf-converter-cache:/root/.cache
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+      # Optional API key guarding the REST API + MCP (Authorization: Bearer / X-API-Key).
+      # Unset = open, which is the intended default: this deployment is local-only or
+      # behind Cloudflare Zero Trust, so auth is handled upstream of the container.
+      # Set it (via .env or the shell) if the service is reachable without such a layer.
+      # Note: the web UI has no key-entry field — with API_KEY set, browser users must
+      # put the key in localStorage as "pdfConverterApiKey".
+      API_KEY: ${API_KEY:-}
+      # PDF_CONVERTER_DEVICE: gpu:0   # or "cpu"
     networks:
       - app-net
     deploy:
@@ -26,9 +34,9 @@ services:
               capabilities: [gpu]
 
 volumes:
-  pdf-ocr-output:
-  pdf-ocr-paddlex:
-  pdf-ocr-cache:
+  pdf-converter-data:
+  pdf-converter-paddlex:
+  pdf-converter-cache:
 
 networks:
   app-net:

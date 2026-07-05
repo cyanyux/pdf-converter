@@ -1,0 +1,35 @@
+packages:
+  - apps/*
+  - packages/*
+
+catalogMode: prefer
+
+catalog:
+  "@types/node": ^24
+  typescript: ~6.0.3
+  "@typescript/native-preview": latest
+  # Pinned to the exact Vite+ 0.2.2 release (matches the ghcr build image tag). This
+  # single bump carries the whole bundled toolchain: vite 8.1.2 / rolldown 1.1.4 /
+  # oxlint 1.72.0 / oxfmt 0.57.0 / oxc 0.138.0 / vitest 4.1.9.
+  vite: npm:@voidzero-dev/vite-plus-core@0.2.2
+  vite-plus: 0.2.2
+overrides:
+  # Keep vitest's `vite` peer bound to the Vite+ core so it never pulls a second
+  # upstream vite (which breaks the vp test cache).
+  vite: "catalog:"
+peerDependencyRules:
+  allowAny:
+    - vite
+  allowedVersions:
+    vite: "*"
+minimumReleaseAgeExclude:
+  - "@voidzero-dev/vite-plus-core@0.2.2"
+  - "@voidzero-dev/vite-plus-darwin-arm64@0.2.2"
+  - "@voidzero-dev/vite-plus-darwin-x64@0.2.2"
+  - "@voidzero-dev/vite-plus-linux-arm64-gnu@0.2.2"
+  - "@voidzero-dev/vite-plus-linux-arm64-musl@0.2.2"
+  - "@voidzero-dev/vite-plus-linux-x64-gnu@0.2.2"
+  - "@voidzero-dev/vite-plus-linux-x64-musl@0.2.2"
+  - "@voidzero-dev/vite-plus-win32-arm64-msvc@0.2.2"
+  - "@voidzero-dev/vite-plus-win32-x64-msvc@0.2.2"
+  - vite-plus@0.2.2

@@ -1,14 +1,34 @@
 .git
 .gitignore
-__pycache__/
-*.pyc
-*.pyo
+.github
 
-# Local artifacts / docs
+# Node / build outputs
+**/node_modules
+**/dist
+**/dist-ssr
+.vite-plus
+.claude
+
+# Python
+worker/.venv
+**/__pycache__
+**/*.pyc
+.mypy_cache
+.pytest_cache
+.ruff_cache
+
+# Runtime data / local artifacts
+data
+*.db
+*.db-wal
+*.db-shm
 *.pdf
-PLAN-*.md
 cookies.txt
+PLAN-*.md
 
-# Editor / OS noise
-.DS_Store
-Thumbs.db
+# Legacy Flask app (removed at cutover; not part of the image)
+app.py
+i18n.py
+s2t_dict.py
+requirements.txt
+static

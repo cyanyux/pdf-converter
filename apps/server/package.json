@@ -1,0 +1,34 @@
+{
+  "name": "server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch --enable-source-maps src/index.ts",
+    "build": "vp pack",
+    "start": "node dist/index.mjs",
+    "mcp": "node src/mcp-stdio.ts",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "@hono/node-server": "2.0.6",
+    "@hono/zod-openapi": "1.4.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@pdf-converter/shared": "workspace:*",
+    "busboy": "^1.6.0",
+    "fflate": "^0.8.2",
+    "hono": "4.12.27",
+    "hono-rate-limiter": "0.5.3",
+    "pdf-lib": "^1.17.1",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
