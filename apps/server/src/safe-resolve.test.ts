@@ -36,3 +36,14 @@ test("contentDisposition emits an ASCII fallback for non-Latin1 names", () => {
   expect(header).toContain("filename*=UTF-8''");
   expect(header).not.toContain("測");
 });
+
+test("length cap truncates by code point so an astral name can't 500 the download", () => {
+  // A CJK Ext-B glyph (U+2137C 𡍼, a surrogate pair) straddling the 200-unit cap must not be
+  // bisected: a lone surrogate makes contentDisposition's encodeURIComponent throw (→ HTTP 500).
+  const name = `${"a".repeat(199)}𡍼𡍼.pdf`;
+  const sanitized = sanitizeDownloadName(name);
+  const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+  expect(loneSurrogate.test(sanitized)).toBe(false);
+  expect(() => contentDisposition(name)).not.toThrow();
+  expect(contentDisposition(name)).toContain("filename*=UTF-8''");
+});

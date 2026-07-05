@@ -5,12 +5,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 /**
- * MCP server (stdio) exposing the PDF-OCR service as tools for local agents
+ * MCP server (stdio) exposing the PDF Converter service as tools for local agents
  * (Claude Desktop / CLI). It is a thin client over the REST API — configure the
- * target with PDF_OCR_URL and API_KEY.
+ * target with PDF_CONVERTER_URL and API_KEY.
  */
 
-const BASE = process.env.PDF_OCR_URL ?? "http://127.0.0.1:8000";
+const BASE = process.env.PDF_CONVERTER_URL ?? "http://127.0.0.1:8000";
 const API_KEY = process.env.API_KEY ?? "";
 
 function headers(extra?: Record<string, string>): Record<string, string> {
@@ -33,7 +33,7 @@ function text(data: unknown) {
 const MODES = z.array(z.enum(["pdf", "markdown", "word"])).min(1);
 const LOCALE = z.enum(["zh-TW", "zh-CN", "en"]).default("zh-TW");
 
-const server = new McpServer({ name: "pdf-ocr", version: "1.0.0" });
+const server = new McpServer({ name: "pdf-converter", version: "1.0.0" });
 
 server.tool(
   "submit_pdf",

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { Job, JobResult, JobStatus, Locale, Mode, Progress } from "@pdf-ocr/shared";
+import type { Job, JobResult, JobStatus, Locale, Mode, Progress } from "@pdf-converter/shared";
 import { config } from "./config.ts";
 
 interface JobRow {
@@ -197,19 +197,48 @@ export class JobStore {
 
   requestCancel(id: string): JobStatus | null {
     return withRetry(() => {
-      const row = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as
-        | { status: JobStatus }
-        | undefined;
-      if (!row) return null;
-      if (TERMINAL.has(row.status)) return row.status;
-      const now = Date.now() / 1000;
-      // A queued job can be cancelled outright; a running one is asked to stop.
-      const next: JobStatus = row.status === "queued" ? "cancelled" : "cancel_requested";
-      this.db.prepare("UPDATE jobs SET status=?, updated_at=? WHERE id=?").run(next, now, id);
-      this.db
-        .prepare("UPDATE progress SET status=?, updated_at=? WHERE job_id=?")
-        .run(next, now, id);
-      return next;
+      // Read + write in one BEGIN IMMEDIATE txn, and terminal-guard the UPDATE, so a
+      // status the worker commits on its own connection between our SELECT and UPDATE
+      // (e.g. 'done' with a downloadable result) can't be clobbered back to a
+      // non-terminal 'cancel_requested', which would wedge the job forever.
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        const row = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as
+          | { status: JobStatus }
+          | undefined;
+        if (!row) {
+          this.db.exec("COMMIT");
+          return null;
+        }
+        if (TERMINAL.has(row.status)) {
+          this.db.exec("COMMIT");
+          return row.status;
+        }
+        const now = Date.now() / 1000;
+        // A queued job can be cancelled outright; a running one is asked to stop.
+        const next: JobStatus = row.status === "queued" ? "cancelled" : "cancel_requested";
+        this.db
+          .prepare(
+            "UPDATE jobs SET status=?, updated_at=? WHERE id=? AND status NOT IN ('done','error','cancelled')",
+          )
+          .run(next, now, id);
+        this.db
+          .prepare(
+            "UPDATE progress SET status=?, updated_at=? WHERE job_id=? AND job_id NOT IN " +
+              "(SELECT id FROM jobs WHERE status IN ('done','error','cancelled'))",
+          )
+          .run(next, now, id);
+        // Re-read: if the guarded UPDATE was a no-op (a terminal status raced in), the
+        // row still holds that terminal state and that's what we return.
+        const after = this.db.prepare("SELECT status FROM jobs WHERE id = ?").get(id) as {
+          status: JobStatus;
+        };
+        this.db.exec("COMMIT");
+        return after.status;
+      } catch (e) {
+        this.db.exec("ROLLBACK");
+        throw e;
+      }
     });
   }
 

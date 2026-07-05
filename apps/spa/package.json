@@ -11,7 +11,7 @@
     "check": "vp check"
   },
   "dependencies": {
-    "@pdf-ocr/shared": "workspace:*",
+    "@pdf-converter/shared": "workspace:*",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "react-markdown": "10.1.0"

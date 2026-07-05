@@ -42,7 +42,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
-      python3 python3-venv pandoc curl ca-certificates \
+      python3 python3-venv curl ca-certificates \
       libgl1 libglib2.0-0 libgomp1 libatomic1 supervisor
 COPY --from=build /tmp/node /usr/local/bin/node
 
@@ -68,10 +68,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
 # ONNX Runtime engine for PP-OCR (paddle2onnx export + onnxruntime-gpu): ~1.14x faster than
 # native Paddle on PP-OCRv6, identical output. Separate layer so the big paddle layers stay
-# cached. Selected via PDF_OCR_ENGINE=onnxruntime (default); auto-falls back to Paddle.
+# cached. Selected via PDF_CONVERTER_ENGINE=onnxruntime (default); auto-falls back to Paddle.
 # Pinned to the 1.23 line: it targets CUDA 12.x (matches the base image); 1.24+ links CUDA 13.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python onnxruntime-gpu==1.23.0 paddle2onnx==2.0.2rc3
+# Docling (born-digital markdown, CPU/text-faithful). CRITICAL: install CPU-only torch FIRST,
+# from the PyTorch CPU index, so docling reuses it and its ~5 GB of CUDA nvidia-* wheels NEVER
+# enter the image (the docling child runs GPU-hidden and must never touch CUDA anyway). Two
+# separate layers, both cache-mounted like the paddle blocks above:
+#   1. torch+torchvision from the CPU index (own --index-url so no CUDA build is even considered).
+#   2. docling==2.110.0 from PyPI, which sees torch already satisfied and pulls no torch/nvidia.
+# --index-strategy unsafe-best-match mirrors the paddle block's house style (merge indexes); the
+# CPU index is the only source of these +cpu wheels while transitive deps resolve from PyPI.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python --index-strategy unsafe-best-match \
+      torch torchvision \
+      --index-url https://download.pytorch.org/whl/cpu \
+      --extra-index-url https://pypi.org/simple/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --python /opt/venv/bin/python docling==2.110.0
 
 WORKDIR /app
 COPY db ./db
@@ -81,15 +96,15 @@ COPY --from=build /app/apps/spa/dist ./apps/spa/dist
 COPY --from=build /app/apps/server/dist ./apps/server/dist
 RUN chmod +x entrypoint.sh && mkdir -p /app/data/uploads /app/data/outputs
 
-ENV PDF_OCR_ROOT=/app \
-    PDF_OCR_DEVICE=gpu:0 \
+ENV PDF_CONVERTER_ROOT=/app \
+    PDF_CONVERTER_DEVICE=gpu:0 \
     CUDA_MODULE_LOADING=EAGER \
     PYTHONPATH=/app/worker/src \
-    PDF_OCR_STATIC=/app/apps/spa/dist \
-    PDF_OCR_DB=/app/data/pdf-ocr.db \
-    PDF_OCR_SCHEMA=/app/db/schema.sql \
-    PDF_OCR_UPLOADS=/app/data/uploads \
-    PDF_OCR_OUTPUTS=/app/data/outputs \
+    PDF_CONVERTER_STATIC=/app/apps/spa/dist \
+    PDF_CONVERTER_DB=/app/data/pdf-converter.db \
+    PDF_CONVERTER_SCHEMA=/app/db/schema.sql \
+    PDF_CONVERTER_UPLOADS=/app/data/uploads \
+    PDF_CONVERTER_OUTPUTS=/app/data/outputs \
     HOST=0.0.0.0 \
     PORT=5000
 

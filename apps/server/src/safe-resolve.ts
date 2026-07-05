@@ -32,7 +32,15 @@ export function sanitizeDownloadName(filename: string, maxLength = 200): string 
     .replace(/[\\/]/g, "_")
     .replace(/[_\s]+/g, "_")
     .replace(/^[\s._]+|[\s._]+$/g, "");
-  if (out.length > maxLength) out = out.slice(0, maxLength).replace(/[\s._]+$/g, "");
+  // Truncate by Unicode code point, not UTF-16 unit: slicing mid-surrogate-pair would leave
+  // a lone surrogate, and contentDisposition's encodeURIComponent then throws URIError (→ 500).
+  // Array.from iterates code points, so an astral CJK name glyph (CJK Ext-B) is never bisected.
+  const cps = Array.from(out);
+  if (cps.length > maxLength)
+    out = cps
+      .slice(0, maxLength)
+      .join("")
+      .replace(/[\s._]+$/g, "");
   return out || "download";
 }
 

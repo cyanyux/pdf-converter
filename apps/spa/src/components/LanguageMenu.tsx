@@ -1,4 +1,4 @@
-import { LOCALES, type Locale } from "@pdf-ocr/shared";
+import { LOCALES, type Locale } from "@pdf-converter/shared";
 import { type ReactElement, useEffect, useRef, useState } from "react";
 import { useI18n } from "../lib/i18n.tsx";
 

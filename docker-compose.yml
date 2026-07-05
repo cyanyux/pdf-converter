@@ -1,7 +1,7 @@
 services:
-  pdf-ocr:
+  pdf-converter:
     build: .
-    container_name: pdf-ocr
+    container_name: pdf-converter
     runtime: nvidia
     init: true
     restart: unless-stopped
@@ -9,23 +9,20 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - pdf-ocr-data:/app/data # jobs db + uploads + outputs
-      - pdf-ocr-paddlex:/root/.paddlex # model weights cache
-      - pdf-ocr-cache:/root/.cache
+      - pdf-converter-data:/app/data # jobs db + uploads + outputs
+      - pdf-converter-paddlex:/root/.paddlex # model weights cache
+      - pdf-converter-cache:/root/.cache
     environment:
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-      # REQUIRED: the API key that guards the REST API + MCP. The container is
-      # internet-exposed via the cloudflared tunnel; entrypoint.sh refuses to start
-      # without it unless PDF_OCR_ALLOW_NO_AUTH=1. Provide it via a .env file or the
-      # shell environment. Note `:-` (not `:?`): an unset key must reach the container so
-      # entrypoint.sh can honour the PDF_OCR_ALLOW_NO_AUTH escape hatch below — a compose
-      # `:?` guard would abort interpolation before the container (and that check) ever runs.
+      # Optional API key guarding the REST API + MCP (Authorization: Bearer / X-API-Key).
+      # Unset = open, which is the intended default: this deployment is local-only or
+      # behind Cloudflare Zero Trust, so auth is handled upstream of the container.
+      # Set it (via .env or the shell) if the service is reachable without such a layer.
+      # Note: the web UI has no key-entry field — with API_KEY set, browser users must
+      # put the key in localStorage as "pdfConverterApiKey".
       API_KEY: ${API_KEY:-}
-      # Local-only escape hatch: uncomment to start WITHOUT an API key. Only on a
-      # trusted/loopback network — never with the tunnel attached.
-      # PDF_OCR_ALLOW_NO_AUTH: "1"
-      # PDF_OCR_DEVICE: gpu:0   # or "cpu"
+      # PDF_CONVERTER_DEVICE: gpu:0   # or "cpu"
     networks:
       - app-net
     deploy:
@@ -37,9 +34,9 @@ services:
               capabilities: [gpu]
 
 volumes:
-  pdf-ocr-data:
-  pdf-ocr-paddlex:
-  pdf-ocr-cache:
+  pdf-converter-data:
+  pdf-converter-paddlex:
+  pdf-converter-cache:
 
 networks:
   app-net:

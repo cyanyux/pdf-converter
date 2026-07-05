@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import logging
+import signal
 import sys
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
-from . import config, docparse, models
+from . import config, docparse, models, probe
+from .engines import ENGINE_DOCLING, ENGINE_PPOCR, ENGINE_VL
 from .i18n import msg
 from .searchable_pdf import Cancelled, create_searchable_pdf
 from .store import Store
@@ -58,27 +61,89 @@ def run_ppocr(store: Store, ocr: Any, job: dict[str, Any]) -> None:
         _cancel_cb(store, [jid]),
         locale=locale,
         dpi=config.SEARCHABLE_DPI,
+        # Clean /Title from the real filename so an inline-viewed PDF shows the right tab caption
+        # in Chrome instead of the source's often-mojibaked title.
+        title=Path(job["filename"]).stem,
     )
     res: dict[str, Any] = {
         "totalPages": result["total_pages"],
         "downloadId": jid,
         "originalName": job["filename"],
+        "engine": ENGINE_PPOCR,
     }
     if "warning" in result:
         res["warning"] = result["warning"]
     store.set_result(jid, jid, res, msg("done", locale))
 
 
+def run_docling_job(store: Store, job: dict[str, Any]) -> None:
+    """Digital-markdown path (Docling, CPU): produce ONLY the claimed markdown job.
+
+    Unlike run_vl_job, this NEVER co-produces the group — a markdown+word dual export whose
+    markdown member routed to Docling has a word member that must still get its own full VL pass
+    when it is claimed. So this saves exactly the one claimed job; the queued word sibling is
+    left for a later VL claim. Docling is imported lazily here (docparse_digital) so the
+    supervisor, the GPU children, and the tests never load it."""
+    from . import docparse_digital
+
+    jid, locale = job["id"], job["locale"]
+    r = docparse_digital.run_digital_markdown(
+        job["upload_path"],
+        config.OUTPUTS_DIR / jid,
+        jid,
+        _progress_cb(store, [jid]),
+        _cancel_cb(store, [jid]),
+        locale,
+    )
+    store.set_result(
+        jid,
+        jid,
+        {
+            "totalPages": r["total_pages"],
+            "downloadId": jid,
+            "imagesCount": len(r["images"]),
+            "originalName": job["filename"],
+            "engine": ENGINE_DOCLING,
+        },
+        msg("done", locale),
+    )
+
+
 def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
     group_id = job.get("group_id")
     group = store.group_jobs(group_id) if group_id else [job]
+    # Siblings share one upload_path, so probe the shared upload AT MOST ONCE per call and reuse
+    # the verdict for every sibling — and only when a markdown sibling exists at all (a solo job
+    # never consults the verdict). None means "probe failed" (see the decline rule below).
+    sibling_route: str | None = None
+    if any(g["mode"] == "markdown" and g["id"] != job["id"] for g in group):
+        try:
+            sibling_route = probe.route_markdown(job["upload_path"])
+        except Exception:
+            sibling_route = None
     # active members of the group (dual export runs VL once for md + word)
     modes: dict[str, dict[str, Any]] = {}
     for g in group:
-        if g["id"] == job["id"] or g["status"] not in ("done", "error", "cancelled"):
-            modes[g["mode"]] = g
+        if g["id"] != job["id"] and g["status"] in ("done", "error", "cancelled"):
+            continue
+        # A markdown sibling that routes to Docling must NOT be co-produced by this VL pass — it
+        # gets its own docling child when claimed. (The CLAIMED job is always kept: if the claimed
+        # job itself were markdown, pick_family would have sent it to the docling family, not here,
+        # so keeping it on 'vl' below is the correct engine for it.) Invariant: on probe failure,
+        # defer to the sibling's own claim — never co-produce with a guessed engine. pick_family is
+        # then the single fallback authority when the sibling is claimed on its own.
+        if g["mode"] == "markdown" and g["id"] != job["id"] and sibling_route != "vl":
+            continue  # routes to docling OR probe failed -> leave queued for its own claim
+        modes[g["mode"]] = g
     job_ids = [g["id"] for g in modes.values()]
     locale = job["locale"]
+
+    # The recognition pass below is shared across the group and its progress is mirrored onto
+    # every member, so promote the queued sibling(s) to 'processing' now — otherwise a sibling
+    # shows live recognition progress while still badged 'queued' (status='processing' is the
+    # honest state and keeps its heartbeat fresh for the group-aware watchdog).
+    for jid in job_ids:
+        store.set_processing(jid)
 
     try:
         restructured, total = docparse.run_vl(
@@ -113,6 +178,7 @@ def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
                         "downloadId": mj["id"],
                         "imagesCount": len(r["images"]),
                         "originalName": mj["filename"],
+                        "engine": ENGINE_VL,
                     },
                     msg("done", locale),
                 )
@@ -136,6 +202,7 @@ def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
                         "downloadId": wj["id"],
                         "imagesCount": r["images_count"],
                         "originalName": wj["filename"],
+                        "engine": ENGINE_VL,
                     },
                     msg("done", locale),
                 )
@@ -145,19 +212,33 @@ def run_vl_job(store: Store, vl: Any, job: dict[str, Any]) -> None:
 
 
 def main() -> None:
+    # The SUPERVISOR owns this child's lifecycle (kill/reap/drain). If a group-directed SIGTERM
+    # (docker stop variants, a shell killing the process group) also reaches the child, it dies
+    # BEFORE the supervisor's graceful DRAIN branch can run — the shutdown then takes the DEAD
+    # path (attempts++, poison-pill counting) instead of the attempt-free drain requeue. Ignore
+    # it here; the supervisor kills the child explicitly when it wants it gone.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
     family = sys.argv[1] if len(sys.argv) > 1 else "ppocr"
-    on_gpu = models.set_device()
     store = Store(config.DB_PATH, config.SCHEMA_PATH)
-    log.info("loading family=%s (gpu=%s)", family, on_gpu)
-    if family == "ppocr":
-        model = models.build_ocr()
-        models.warmup_ocr(model)
-    elif family == "vl":
-        model = models.build_vl()
+    model: Any = None
+    if family == "docling":
+        # CPU-only digital-markdown path: no GPU device select, no model preload. The supervisor
+        # boots this child with CUDA_VISIBLE_DEVICES="" so it can never touch VRAM. Docling itself
+        # is imported lazily on first job (run_docling_job) — READY is immediate.
+        log.info("loading family=docling (cpu, gpu hidden)")
+        _emit("@@READY")
     else:
-        _emit(f"@@FATAL unknown family {family}")
-        return
-    _emit("@@READY")
+        on_gpu = models.set_device()
+        log.info("loading family=%s (gpu=%s)", family, on_gpu)
+        if family == "ppocr":
+            model = models.build_ocr()
+            models.warmup_ocr(model)
+        elif family == "vl":
+            model = models.build_vl()
+        else:
+            _emit(f"@@FATAL unknown family {family}")
+            return
+        _emit("@@READY")
 
     for line in sys.stdin:
         line = line.strip()
@@ -168,6 +249,8 @@ def main() -> None:
         try:
             if family == "ppocr":
                 run_ppocr(store, model, job)
+            elif family == "docling":
+                run_docling_job(store, job)
             else:
                 run_vl_job(store, model, job)
             _emit(f"@@DONE {jid}")

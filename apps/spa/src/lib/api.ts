@@ -1,7 +1,18 @@
-import type { CreateJobsResponse, HealthResponse, Job, Locale, Mode } from "@pdf-ocr/shared";
+import type { CreateJobsResponse, HealthResponse, Job, Locale, Mode } from "@pdf-converter/shared";
 
 const BASE = "/api/v1";
-const API_KEY_STORAGE = "pdfOcrApiKey";
+const API_KEY_STORAGE = "pdfConverterApiKey";
+
+/** An error carrying the HTTP status of a failed response, so callers can tell an
+ *  auth/server rejection (the connection is fine) apart from a network failure. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
 
 function authHeaders(): Record<string, string> {
   const key = localStorage.getItem(API_KEY_STORAGE);
@@ -28,7 +39,7 @@ export async function getJob(id: string): Promise<Job | null> {
     headers: authHeaders(),
   });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`job ${res.status}`);
+  if (!res.ok) throw new ApiError(`job ${res.status}`, res.status);
   return (await res.json()) as Job;
 }
 

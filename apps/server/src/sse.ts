@@ -1,4 +1,4 @@
-import type { Job } from "@pdf-ocr/shared";
+import type { Job } from "@pdf-converter/shared";
 import type { JobStore } from "./db.ts";
 
 export interface HubSnapshot {

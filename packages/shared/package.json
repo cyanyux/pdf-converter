@@ -1,5 +1,5 @@
 {
-  "name": "@pdf-ocr/shared",
+  "name": "@pdf-converter/shared",
   "version": "0.0.0",
   "private": true,
   "type": "module",

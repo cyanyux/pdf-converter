@@ -1,5 +1,5 @@
 import { open, readFile, stat } from "node:fs/promises";
-import { PDFDocument } from "pdf-lib";
+import { PDFDocument, ParseSpeeds } from "pdf-lib";
 import { config } from "./config.ts";
 
 export type PreflightReason =
@@ -66,7 +66,13 @@ export async function preflightPdf(path: string): Promise<PreflightResult> {
     return { ok: false, reason: "invalid_pdf" };
   }
   try {
-    const doc = await PDFDocument.load(buf, { ignoreEncryption: false });
+    // Read-only preflight: parse fast and don't rewrite the Info dict. ignoreEncryption stays
+    // false so an encrypted PDF still throws and is classified below.
+    const doc = await PDFDocument.load(buf, {
+      ignoreEncryption: false,
+      parseSpeed: ParseSpeeds.Fastest,
+      updateMetadata: false,
+    });
     const pages = doc.getPageCount();
     if (pages === 0) return { ok: false, reason: "empty_pdf" };
     return { ok: true, pages };

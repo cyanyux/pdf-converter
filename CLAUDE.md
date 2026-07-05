@@ -1,12 +1,99 @@
-# CLAUDE.md
+## What this is
 
-See [AGENTS.md](AGENTS.md) for full guidance — architecture, the Vite+ `vp`
-toolchain, and how to drive the OCR service via MCP or the REST API.
+**PDF Converter** — self-hosted PDF conversion. Upload a PDF, get back a **searchable PDF**,
+**Markdown**, or **Word (.docx)**. Each job is probed and routed to the highest-fidelity
+engine: born-digital PDFs → **Docling** (CPU, characters copied from the embedded text
+layer — never OCR'd); scanned PDFs → **PaddleOCR 3.7** (PP-OCRv6 for the searchable-PDF
+text layer, PaddleOCR-VL for Markdown/Word) on the GPU. A pdf-mode job whose input is
+already fully searchable is returned as-is (`notice: "already_searchable"`).
 
-Quick reference:
+Architecture: a **TypeScript** monorepo (React SPA + Hono API + MCP, managed by
+**Vite+**) talking to a headless **Python worker** through a durable **SQLite**
+job queue. The web layer never touches the GPU; the worker owns it. Docling children
+run with `CUDA_VISIBLE_DEVICES=""` — only PaddleOCR children may use VRAM.
 
-- `vp check` — format + lint + type-check (run before committing); `vp test` — tests; `vp dev` — SPA + API.
-- Python worker (`worker/`): `ruff check worker/src`, `mypy`, `pytest`.
-- OCR is async: `POST /api/v1/jobs` → poll `GET /api/v1/jobs/{id}` → `GET /api/v1/download/{id}`.
-  Machine-readable schema at `/openapi.json`; MCP server at `apps/server/src/mcp-stdio.ts`.
-- SQLite schema `db/schema.sql` is the TS↔Python contract; shared Zod types in `packages/shared`.
+```
+apps/spa      React 19 + TS SPA (Vite+)          packages/shared  Zod contract (SPA + server)
+apps/server   Hono API + SSE + static + MCP      worker/          Python worker (probe → Docling | PaddleOCR)
+db/schema.sql canonical SQLite schema (the cross-language contract)
+```
+
+Routing lives in `worker/src/worker/probe.py` (`route_markdown`, `is_already_searchable`);
+the digital markdown pipeline is `worker/src/worker/docparse_digital.py` (byte-faithful:
+no s2tw / fix_ocr_text — the text layer is ground truth). Every job result carries
+`engine`: `docling` | `paddleocr-vl` | `pp-ocrv6` | `none`.
+
+## Toolchain — Vite+ (`vp`)
+
+This project uses **Vite+** (unified toolchain: Vite, Rolldown, Vitest, tsdown,
+Oxlint, Oxfmt). Use the `vp` CLI, not npm/vite directly.
+
+- `vp install` — install dependencies (pnpm, managed by vp)
+- `vp dev` / `pnpm dev` — run the SPA dev server + API together
+- `vp check` — format + lint + type-check (run before committing)
+- `vp test` — run Vitest
+- `vp build` / `vp run -r build` — production build (SPA `dist/` + bundled server)
+
+The Python worker uses its own toolchain: `ruff`, `mypy`, `pytest` (see `worker/pyproject.toml`).
+Its venv needs CPU-only torch installed BEFORE `-e ".[dev]"` (see README dev section) —
+CUDA torch must never enter the venv or the Docker image.
+
+## Using the service as an agent
+
+The API is **async job-based**: submit → poll → download. Auth is optional
+(set `API_KEY`; send it as `Authorization: Bearer <key>` or `X-API-Key: <key>`).
+
+### Option A — MCP (recommended for tool-using agents)
+
+A stdio MCP server exposes the service as tools. Run:
+
+```bash
+PDF_CONVERTER_URL=http://127.0.0.1:8000 API_KEY=... node apps/server/dist/mcp-stdio.mjs
+# (dev: `pnpm --filter server mcp`)
+```
+
+Tools: `submit_pdf(path, modes[], locale?)`, `get_job(id)`, `wait_for_job(id, timeout_seconds?)`,
+`get_markdown(id)`, `download_result(id, out_path)`, `cancel_job(id)`.
+`modes` ∈ `pdf | markdown | word`; `locale` ∈ `zh-TW | zh-CN | en`.
+
+### Option B — REST API
+
+Machine-readable schema at **`/openapi.json`**; Swagger UI at **`/docs`**.
+
+```bash
+# submit (markdown + word share one VL pass when both route to VL)
+curl -F files=@doc.pdf -F modes=markdown -F modes=word -F locale=zh-TW \
+     http://127.0.0.1:8000/api/v1/jobs
+# -> {"jobs":[{"id":"...","mode":"markdown",...},{"id":"...","mode":"word",...}]}
+
+# poll until status == "done" (or stream GET /api/v1/jobs/{id}/events)
+curl http://127.0.0.1:8000/api/v1/jobs/<id>
+
+# download the artifact (pdf / zip / docx by mode)
+curl -OJ http://127.0.0.1:8000/api/v1/download/<id>
+```
+
+Job statuses: `queued → processing → saving → done` (or `error` / `cancelled`).
+For verified extractions with a QA loop, use the `/pdf-extract` skill
+(`.claude/skills/pdf-extract/`) on top of this API.
+
+## Conventions
+
+- Run `vp check` (TS) and `ruff check` + `mypy` (Python `worker/`) before committing.
+- The SQLite schema in `db/schema.sql` is the single source of truth shared by the
+  TS server (`node:sqlite`) and Python worker (`sqlite3`) — change all three together.
+- Shared API types live in `packages/shared` (Zod) and are imported by both the SPA
+  and the server; `/openapi.json` is generated from them.
+- Env vars are `PDF_CONVERTER_*` (renamed from `PDF_OCR_*`, no fallbacks — the
+  entrypoint warns if legacy vars are set).
+- Group invariants (markdown+word dual export): each job is saved exactly once; a
+  Docling child produces ONLY its claimed job; a VL child declines markdown siblings
+  that route to Docling. Cancellation always resolves the whole group.
+
+## Agent coordination
+
+- Use Fable for planning and coordination. For anything you can scope into a clean subtask, start a Opus 4.8 xHigh subagent.
+
+- Give each subagent a clear goal, the relevant context, and what to bring back. Don't have them invent the plan. Run independent pieces in parallel.
+
+- When they return, review the results before you merge anything. If something's off, rewrite the brief and spin another, don't silently patch over it yourself unless it's trivial.

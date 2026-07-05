@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pdf-ocr-worker"
+name = "pdf-converter-worker"
 version = "0.0.0"
-description = "Headless GPU inference worker for pdf-ocr (PaddleOCR 3.7)."
+description = "Headless GPU inference worker for PDF Converter (PaddleOCR 3.7 + Docling)."
 requires-python = ">=3.12,<3.13"
 dependencies = [
   # NOTE: paddlepaddle-gpu is installed separately from the cu126 index in the
@@ -16,6 +16,18 @@ dependencies = [
   "docxcompose",
   "beautifulsoup4==4.15.0",
   "numpy>=2.3,<2.4",
+  # Simplified->Traditional (Taiwan) conversion for zh-TW output; context-aware, so it
+  # resolves the one-to-many ambiguities a static table cannot (see text_utils.fix_ocr_text).
+  "opencc==1.4.0",
+  # Render VL's inline LaTeX math/units to Unicode (see text_utils.latex_to_unicode). Already
+  # pulled in transitively by paddleocr[doc-parser]; declared here because we import it directly.
+  "pylatexenc==2.10",
+  # Docling: born-digital markdown from the PDF text layer (CPU, text-faithful) — used instead
+  # of rasterize+PaddleOCR-VL when probe.route_markdown says the PDF is digital (see docparse_digital).
+  # NOTE: docling pulls torch; torch MUST be CPU-only here (the docling child runs with the GPU
+  # hidden and never touches CUDA). In the image, torch+torchvision are installed from the PyTorch
+  # CPU index BEFORE docling so its CUDA nvidia wheels never enter the layer — see the Dockerfile.
+  "docling==2.110.0",
 ]
 
 [project.optional-dependencies]

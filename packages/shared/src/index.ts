@@ -54,6 +54,10 @@ export const JobResult = z.object({
   originalName: z.string().optional(),
   /** non-fatal warning (e.g. some pages failed) */
   warning: z.string().optional(),
+  /** backend the worker routed this job to (surfaced as a chip in the UI) */
+  engine: z.enum(["pp-ocrv6", "paddleocr-vl", "docling", "none"]).optional(),
+  /** non-fatal informational notice (e.g. the source PDF was already searchable) */
+  notice: z.enum(["already_searchable"]).optional(),
 });
 export type JobResult = z.infer<typeof JobResult>;
 

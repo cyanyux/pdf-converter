@@ -1,10 +1,10 @@
-import { type Job, type Mode } from "@pdf-ocr/shared";
+import { type CreateJobsResponse, isTerminal, type Job, type Mode } from "@pdf-converter/shared";
 import { type ReactElement, useCallback, useRef, useState } from "react";
 import { JobCard } from "./components/JobCard.tsx";
 import { LanguageMenu } from "./components/LanguageMenu.tsx";
 import { PreviewModal } from "./components/PreviewModal.tsx";
 import { fetchPreview, triggerDownload } from "./lib/api.ts";
-import { fileKey, formatSize } from "./lib/format.ts";
+import { fileKey, formatSize, skipReasonKey } from "./lib/format.ts";
 import { useI18n } from "./lib/i18n.tsx";
 import { type ToastKind, useJobStore } from "./lib/jobs.ts";
 import { useToast } from "./lib/toast.tsx";
@@ -14,6 +14,10 @@ const FORMATS: { mode: Mode; titleKey: string; descKey: string; cls: string }[] 
   { mode: "markdown", titleKey: "fmt_md", descKey: "fmt_md_desc", cls: "md" },
   { mode: "word", titleKey: "fmt_word", descKey: "fmt_word_desc", cls: "word" },
 ];
+
+// Browsers block a burst of programmatic <a> clicks fired in one gesture, so
+// space "Download all" out (see downloadAll).
+const DOWNLOAD_STAGGER_MS = 400;
 
 // Line-art format icons; stroke color is set per-format in CSS (.format-icon.<cls> svg).
 const FORMAT_ICONS: Record<Mode, ReactElement> = {
@@ -92,9 +96,10 @@ export function App() {
     [show, t],
   );
 
-  const { jobs, submit, cancel, remove } = useJobStore(locale, onToast);
+  const { jobs, submit, cancel, remove, reconnecting, authError } = useJobStore(locale, onToast);
 
   const [files, setFiles] = useState<File[]>([]);
+  const [skipped, setSkipped] = useState<CreateJobsResponse["skipped"]>([]);
   const [modes, setModes] = useState<Set<Mode>>(new Set());
   const [dragOver, setDragOver] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -104,6 +109,10 @@ export function App() {
     content: "",
   });
   const inputRef = useRef<HTMLInputElement>(null);
+  // Synchronous re-entrancy guard for downloadAll (a double-click fires two onClicks
+  // in one tick, before the `downloading` state re-render lands and disables the button).
+  const downloadingRef = useRef(false);
+  const [downloading, setDownloading] = useState(false);
 
   const addFiles = useCallback((list: FileList | null) => {
     if (!list) return;
@@ -133,8 +142,11 @@ export function App() {
     if (files.length === 0 || modes.size === 0) return;
     setBusy(true);
     try {
-      await submit(files, [...modes]);
+      const resp = await submit(files, [...modes]);
       setFiles([]);
+      // The server accepts a mixed batch (HTTP 200) but reports rejected files in
+      // resp.skipped; surface them so they don't vanish silently with the selection.
+      setSkipped(resp.skipped);
     } catch (e) {
       show(t("toast_error", { msg: e instanceof Error ? e.message : String(e) }));
     } finally {
@@ -156,12 +168,41 @@ export function App() {
   );
 
   const completed = jobs.filter((j) => j.status === "done");
-  const downloadAll = () => {
-    for (const j of completed) triggerDownload(j);
-    if (completed.length) show(t("toast_downloading", { count: completed.length }));
+  // Everything finished — done, errored, or cancelled — is clearable. Only done jobs are
+  // downloadable. In-flight jobs (queued/processing/cancel_requested) stay put.
+  const clearable = jobs.filter((j) => isTerminal(j.status));
+  // Latest jobs, read inside the staggered downloadAll loop so a job removed (or
+  // GC'd) mid-loop isn't triggerDownload()'d against a now-404 URL.
+  const jobsRef = useRef(jobs);
+  jobsRef.current = jobs;
+  const downloadAll = async () => {
+    // Re-entrancy guard: a double-click fires two onClicks in one tick, which would
+    // interleave two stagger loops (double downloads, doubled toast, defeated stagger).
+    if (downloadingRef.current || completed.length === 0) return;
+    downloadingRef.current = true;
+    setDownloading(true);
+    show(t("toast_downloading", { count: completed.length }));
+    try {
+      // Fire the downloads sequentially with a small gap — a synchronous burst of
+      // <a>.click()s in one gesture gets throttled by browsers after the first.
+      for (let i = 0; i < completed.length; i++) {
+        // Re-check against the live store: the job may have been removed while the
+        // loop was stalling between staggered clicks, in which case its download URL
+        // now 404s.
+        const fresh = jobsRef.current.find((j) => j.id === completed[i].id);
+        if (!fresh || fresh.status !== "done") continue;
+        triggerDownload(fresh);
+        if (i < completed.length - 1) {
+          await new Promise((r) => setTimeout(r, DOWNLOAD_STAGGER_MS));
+        }
+      }
+    } finally {
+      downloadingRef.current = false;
+      setDownloading(false);
+    }
   };
   const clearAll = () => {
-    for (const j of completed) void remove(j.id);
+    for (const j of clearable) void remove(j.id);
   };
 
   return (
@@ -172,6 +213,18 @@ export function App() {
         <h1>{t("title")}</h1>
         <p>{t("subtitle")}</p>
       </header>
+
+      {authError ? (
+        <div className="banner-reconnecting" role="status">
+          {t("auth_error")}
+        </div>
+      ) : (
+        reconnecting && (
+          <div className="banner-reconnecting" role="status">
+            {t("reconnecting")}
+          </div>
+        )
+      )}
 
       <button
         type="button"
@@ -220,6 +273,25 @@ export function App() {
         </div>
       )}
 
+      {skipped.length > 0 && (
+        <div className="skipped-notice" role="alert">
+          <div className="skipped-notice-header">
+            <span>{t("skipped_title", { count: skipped.length })}</span>
+            <button type="button" className="skipped-notice-dismiss" onClick={() => setSkipped([])}>
+              {t("skipped_dismiss")}
+            </button>
+          </div>
+          <ul className="skipped-notice-list">
+            {skipped.map((s) => (
+              <li key={`${s.filename}|${s.reason}`}>
+                <span className="skipped-notice-name">{s.filename}</span>
+                <span className="skipped-notice-reason">{t(skipReasonKey(s.reason))}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <div className="section-title">{t("output_format")}</div>
       <div className="format-options">
         {FORMATS.map((f) => (
@@ -253,11 +325,18 @@ export function App() {
                 ? t("completed_count", { count: completed.length })
                 : t("header_processing")}
             </span>
-            {completed.length > 0 && (
+            {clearable.length > 0 && (
               <div className="jobs-actions">
-                <button type="button" className="btn-action" onClick={downloadAll}>
-                  {t("btn_download_all")}
-                </button>
+                {completed.length > 0 && (
+                  <button
+                    type="button"
+                    className="btn-action"
+                    disabled={downloading}
+                    onClick={() => void downloadAll()}
+                  >
+                    {t("btn_download_all")}
+                  </button>
+                )}
                 <button type="button" className="btn-action" onClick={clearAll}>
                   {t("btn_clear_all")}
                 </button>

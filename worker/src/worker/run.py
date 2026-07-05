@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import queue
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,7 +23,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from . import config, models
+import pymupdf as fitz
+
+from . import config, models, probe
+from .engines import ENGINE_NONE
 from .i18n import msg
 from .store import TERMINAL, Store
 
@@ -32,6 +36,8 @@ _TICK_EMPTY = object()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] worker: %(message)s")
 log = logging.getLogger("worker")
 
+# Default family per mode; markdown is refined at claim time by probe.route_markdown (a digital
+# PDF routes to the 'docling' family, a scanned one to 'vl'). pdf/word are fixed.
 FAMILY_BY_MODE = {"pdf": "ppocr", "markdown": "vl", "word": "vl"}
 # Progress statuses meaning "past recognition, in the opaque CPU save/consolidation phase";
 # the watchdog gives these a looser idle bound (config.SAVE_IDLE_TIMEOUT_S).
@@ -54,7 +60,13 @@ class ModelChild:
     stdout pipe can't back up regardless of how chatty the child is.
     """
 
-    def __init__(self, family: str, load_timeout_s: float, on_wait: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        family: str,
+        load_timeout_s: float,
+        on_wait: Callable[[], None] | None = None,
+        env: dict[str, str] | None = None,
+    ) -> None:
         self.family = family
         self.proc = subprocess.Popen(
             [sys.executable, "-m", "worker.child", family],
@@ -62,7 +74,7 @@ class ModelChild:
             stdout=subprocess.PIPE,
             text=True,
             bufsize=1,
-            env=os.environ.copy(),
+            env=env if env is not None else os.environ.copy(),
         )
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._reader = threading.Thread(target=self._read_loop, daemon=True)
@@ -113,7 +125,8 @@ class ModelChild:
     def process(self, job: dict[str, Any], on_tick: Callable[[], str | None], tick_s: float) -> str:
         """Send a job; block until completion, calling on_tick() whenever a tick elapses
         with no child output. Returns DONE | ERR | DEAD, or whatever truthy verdict on_tick
-        returns (TIMEOUT | CANCELLED) so the supervisor can kill + recover a wedged child."""
+        returns (TIMEOUT | CANCELLED | DRAIN) so the supervisor can kill + recover a wedged
+        child, or promptly abort an in-flight job on graceful shutdown."""
         assert self.proc.stdin is not None
         try:
             self.proc.stdin.write(json.dumps(job) + "\n")
@@ -176,6 +189,78 @@ def cleanup_upload(store: Store, job: dict[str, Any]) -> None:
         Path(up).unlink(missing_ok=True)
 
 
+def pick_family(job: dict[str, Any]) -> str:
+    """Resolve the model family for a claimed job, refining markdown at claim time.
+
+    pdf -> ppocr, word -> vl (fixed). markdown is routed by probe.route_markdown against the
+    upload: a born-digital PDF -> 'docling' (CPU, text-faithful), a scanned one -> 'vl'. A probe
+    failure (unreadable upload) falls back to 'vl', whose own pipeline surfaces the real error.
+    """
+    base = FAMILY_BY_MODE.get(job["mode"], "vl")
+    if job["mode"] != "markdown":
+        return base
+    up = job.get("upload_path")
+    if not up:
+        return "vl"
+    try:
+        return probe.route_markdown(up)
+    except Exception as e:
+        log.warning("route_markdown probe failed for %s (%s); using vl", job["id"], e)
+        return "vl"
+
+
+def _docling_env() -> dict[str, str]:
+    """Environment for the docling child: the GPU is HIDDEN so it can never touch VRAM.
+
+    CUDA_VISIBLE_DEVICES="" is set ONLY in the child's copy of the environment — never the
+    supervisor's or the VL/PP-OCR children's — so the digital-markdown path stays strictly CPU
+    while the GPU families keep full device access.
+    """
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = ""
+    return env
+
+
+def complete_already_searchable(store: Store, job: dict[str, Any], total: int) -> None:
+    """Short-circuit a mode=pdf job whose input already has a text layer on EVERY page.
+
+    No OCR is needed, so no model child boots: copy the original upload to
+    outputs/<download_id>/<download_id>.pdf and mark the job done. `total` is the page count from
+    the caller's single classify_pages pass (no re-probe here). Mirrors run_ppocr's result shape
+    plus engine='none' + notice='already_searchable' (the TS side reads both). The out dir is
+    wiped+recreated first for requeue safety, like the save pipelines.
+    """
+    jid, locale = job["id"], job.get("locale")
+    out_dir = config.OUTPUTS_DIR / jid
+    shutil.rmtree(out_dir, ignore_errors=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_pdf = out_dir / f"{jid}.pdf"
+    shutil.copyfile(job["upload_path"], out_pdf)
+    # Clean /Title from the real filename, mirroring child.py run_ppocr, so an inline-viewed PDF
+    # shows the right tab caption in Chrome instead of the source's often-mojibaked title. Best
+    # effort: an incremental metadata save keeps the file near-byte-identical (only an appended
+    # xref differs), and a failure here must still ship the copy.
+    try:
+        doc = fitz.open(out_pdf)
+        try:
+            meta = dict(doc.metadata or {})
+            meta["title"] = Path(job["filename"]).stem
+            doc.set_metadata(meta)
+            doc.save(str(out_pdf), incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)  # type: ignore[attr-defined]
+        finally:
+            doc.close()
+    except Exception as e:
+        log.warning("already-searchable /Title update skipped for %s: %s", jid, e)
+    res: dict[str, Any] = {
+        "totalPages": total or 1,
+        "downloadId": jid,
+        "originalName": job["filename"],
+        "engine": ENGINE_NONE,
+        "notice": "already_searchable",
+    }
+    store.set_result(jid, jid, res, msg("done", locale))
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
@@ -197,10 +282,13 @@ def main() -> None:
             child.close()
             child = None
         if child is None:
-            # on_wait=maintenance keeps the worker heartbeat fresh during the model load
-            # (first run downloads ~2 GB), so /health and the container HEALTHCHECK don't
-            # flag a still-loading worker as dead.
-            child = ModelChild(family, config.MODEL_LOAD_TIMEOUT_S, on_wait=maintenance)
+            # The docling (digital-markdown) child runs GPU-hidden so it can never touch VRAM;
+            # switching to it also tears down any live GPU child first (above), so families never
+            # contend for the device. on_wait=maintenance keeps the worker heartbeat fresh during
+            # the model load (first VL/PP-OCR run downloads ~2 GB) so /health and the container
+            # HEALTHCHECK don't flag a still-loading worker as dead.
+            env = _docling_env() if family == "docling" else None
+            child = ModelChild(family, config.MODEL_LOAD_TIMEOUT_S, on_wait=maintenance, env=env)
         return child
 
     def maintenance() -> None:
@@ -242,6 +330,15 @@ def main() -> None:
 
         def on_tick() -> str | None:
             maintenance()
+            # A SIGTERM (container stop/restart) sets _stop, but the outer while-loop only
+            # observes it BETWEEN claims — a long save-phase job would block here past
+            # supervisord's stopwaitsecs, get SIGKILLed, and orphan the model child holding
+            # VRAM. Surface the shutdown as a DRAIN verdict so process() unwinds at the next
+            # idle tick (between pages / exports): the supervisor then kills the child promptly
+            # and REQUEUES the job (not user-cancelled) so the reaper/attempts re-run it on the
+            # next start. Checked first so shutdown always wins over cancel/timeout bookkeeping.
+            if _stop:
+                return "DRAIN"
             now = time.time()
             # Escalate to a hard kill only when every member the child is ACTUALLY working is
             # cancelled — the claimed job plus any still-non-terminal sibling. This mirrors the
@@ -291,7 +388,31 @@ def main() -> None:
                 time.sleep(config.POLL_S)
                 continue
 
-            family = FAMILY_BY_MODE.get(job["mode"], "vl")
+            # Already-searchable short-circuit: a mode=pdf job whose input already has a text
+            # layer on every page needs no OCR — complete it WITHOUT booting any child (the live
+            # child, if any, stays up for the next real job). A probe failure falls through to the
+            # normal PP-OCR path. Runs before family selection so no child is torn down/booted.
+            if job["mode"] == "pdf" and job.get("upload_path"):
+                # Walk the PDF ONCE here: classify, apply the pure predicate, and reuse the page
+                # count for the result (complete_already_searchable no longer re-probes).
+                try:
+                    info = probe.classify_pages(job["upload_path"])
+                    searchable = probe.already_searchable(info)
+                except Exception as e:
+                    log.warning("is_already_searchable probe failed for %s (%s); running OCR", job["id"], e)
+                    info, searchable = None, False
+                if searchable:
+                    try:
+                        assert info is not None
+                        complete_already_searchable(store, job, info["total"])
+                        cleanup_upload(store, job)
+                        log.info("job %s -> DONE (already searchable, no child)", job["id"])
+                    except Exception as e:
+                        log.exception("already-searchable short-circuit failed for %s", job["id"])
+                        store.requeue(job["id"], config.MAX_ATTEMPTS, f"already-searchable copy failed: {e}")
+                    continue
+
+            family = pick_family(job)
             log.info("claimed %s (%s -> %s)", job["id"], job["mode"], family)
             try:
                 current = ensure_child(family)
@@ -311,10 +432,46 @@ def main() -> None:
                 # cancellation (unless it already committed a terminal result).
                 current.kill()
                 child = None
+                cancel_msg = msg("cancelled", job.get("locale"))
                 if store.status_of(job["id"]) not in TERMINAL:
-                    store.set_cancelled(job["id"], msg("cancelled", job.get("locale")))
+                    store.set_cancelled(job["id"], cancel_msg)
+                # The SIGKILL above pre-empts the child's own group-wide Cancelled handler
+                # (child.py sets EVERY member cancelled), so a dual export (markdown+word share
+                # one VL pass via group_id) would leave the UN-claimed sibling stuck forever at
+                # 'cancel_requested' — a non-terminal state no reap/claim/gc resolves, leaking a
+                # phantom active job and pinning the shared upload. Resolve the whole group.
+                store.resolve_group_cancel_requested(job.get("group_id"), cancel_msg)
                 cleanup_upload(store, job)
                 log.warning("job %s killed on cancel request", job["id"])
+            elif outcome == "DRAIN":
+                # Graceful shutdown observed mid-job: kill the child now (VRAM reclaimed on exit)
+                # so we don't overrun supervisord's stopwaitsecs, and re-queue the job WITHOUT
+                # counting an attempt (a drain is not a failure). Re-queue every non-terminal
+                # group member so a dual export's sibling is picked up on next start too. The
+                # outer `while not _stop` then exits and the finally-block tears down cleanly.
+                current.kill()
+                child = None
+                gid = job.get("group_id")
+                # A user's pending cancel must survive the drain: resolve every 'cancel_requested'
+                # member to terminal 'cancelled' FIRST, so the requeue below (guarded off
+                # 'cancel_requested') can't resurrect it back to 'queued' and run it to completion
+                # after restart. resolve_group_cancel_requested is a no-op for a NULL group_id and
+                # for a single-export 'cancel_requested' job, so handle that case explicitly too.
+                store.resolve_group_cancel_requested(gid, msg("cancelled", job.get("locale")))
+                if not gid and store.is_cancel_requested(job["id"]):
+                    store.set_cancelled(job["id"], msg("cancelled", job.get("locale")))
+                ids = [g["id"] for g in store.group_jobs(gid)] if gid else [job["id"]]
+                if job["id"] not in ids:
+                    ids.append(job["id"])
+                for jid in ids:
+                    # requeue_for_shutdown is guarded off 'cancel_requested' and returns False when
+                    # it didn't touch a row. A race can leave the non-group claimed job at
+                    # 'cancel_requested' AFTER the resolve above (the user cancelled between them):
+                    # the requeue no-ops, and nothing else terminalizes it. Detect that no-op and
+                    # let the cancel win via the existing cancelled path, so it never strands.
+                    if not store.requeue_for_shutdown(jid) and store.status_of(jid) == "cancel_requested":
+                        store.set_cancelled(jid, msg("cancelled", job.get("locale")))
+                log.warning("job %s requeued on shutdown drain", job["id"])
             else:  # DEAD (child exited) or TIMEOUT (wedged -> kill)
                 if outcome == "TIMEOUT":
                     current.kill()

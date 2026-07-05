@@ -15,7 +15,7 @@
     "@hono/node-server": "2.0.6",
     "@hono/zod-openapi": "1.4.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@pdf-ocr/shared": "workspace:*",
+    "@pdf-converter/shared": "workspace:*",
     "busboy": "^1.6.0",
     "fflate": "^0.8.2",
     "hono": "4.12.27",

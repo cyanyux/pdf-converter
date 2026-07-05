@@ -34,6 +34,11 @@ export function parseMultipart(c: Context<{ Bindings: HttpBindings }>): Promise<
     try {
       bb = busboy({
         headers: req.headers,
+        // Decode Content-Disposition params (the upload filename) as UTF-8. Browsers
+        // send a non-ASCII filename as raw UTF-8 bytes in `filename="…"`; busboy's
+        // default (undefined → null decoder) keeps them as latin1, mangling e.g.
+        // `臺北…` into `è ºå ç…`. Field *values* use defCharset (already utf8).
+        defParamCharset: "utf8",
         limits: {
           fileSize: config.maxUploadBytes,
           files: config.maxFilesPerRequest,

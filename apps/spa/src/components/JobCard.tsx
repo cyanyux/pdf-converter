@@ -1,4 +1,4 @@
-import { type Job, isTerminal } from "@pdf-ocr/shared";
+import { type Job, isTerminal } from "@pdf-converter/shared";
 import { useI18n } from "../lib/i18n.tsx";
 
 const FORMAT_LABEL: Record<Job["mode"], string> = { pdf: "PDF", markdown: "MD", word: "Word" };
@@ -67,8 +67,16 @@ export function JobCard({ job, onCancel, onRemove, onDownload, onPreview }: Prop
         <>
           <div className="job-result">
             <div className="job-result-text">
-              <h3>{t("result_done")}</h3>
+              <h3>
+                {t("result_done")}
+                {job.result.engine && job.result.engine !== "none" && (
+                  <span className="job-engine-chip">{job.result.engine}</span>
+                )}
+              </h3>
               <p>{pageInfo}</p>
+              {job.result.notice === "already_searchable" && (
+                <p className="job-notice">{t("notice_already_searchable")}</p>
+              )}
             </div>
           </div>
           <div className="job-buttons">

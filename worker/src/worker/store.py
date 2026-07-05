@@ -34,8 +34,15 @@ class Store:
     # ---- supervisor ----
 
     def reap(self, stale_s: int, max_attempts: int) -> None:
-        """Recover jobs a dead worker left in 'processing'; fail poison pills."""
+        """Recover jobs a dead worker left in 'processing'; fail poison pills.
+
+        Also a systemic backstop for stranded cancels: a 'cancel_requested' job whose heartbeat
+        is stale has no child running it (crash/restart), and nothing else terminalizes that
+        non-terminal state — so resolve it (and its whole group, mirroring
+        resolve_group_cancel_requested) to 'cancelled'.
+        """
         cutoff = time.time() - stale_s
+        self._reap_stale_cancel_requested(cutoff)
         rows = self.conn.execute(
             "SELECT id, attempts FROM jobs WHERE status='processing' AND (heartbeat_at IS NULL OR heartbeat_at < ?)",
             (cutoff,),
@@ -65,6 +72,31 @@ class Store:
                     "UPDATE jobs SET status='queued', attempts=attempts+1, heartbeat_at=NULL, updated_at=? WHERE id=?",
                     (now, row["id"]),
                 )
+
+    def _reap_stale_cancel_requested(self, cutoff: float) -> None:
+        """Resolve stranded 'cancel_requested' jobs (stale heartbeat) to 'cancelled'.
+
+        Same staleness rule as the 'processing' reap: a NULL or older-than-cutoff heartbeat means
+        no child is running the job. After a crash/restart nothing else terminalizes it, so
+        finish the cancel here — resolving the WHOLE group (like resolve_group_cancel_requested)
+        so a dual export's sibling can't leak. Each row's status + progress commit atomically.
+        """
+        rows = self.conn.execute(
+            "SELECT id, group_id FROM jobs "
+            "WHERE status='cancel_requested' AND (heartbeat_at IS NULL OR heartbeat_at < ?)",
+            (cutoff,),
+        ).fetchall()
+        seen: set[str] = set()
+        for row in rows:
+            gid = row["group_id"]
+            if gid:
+                if gid in seen:
+                    continue
+                seen.add(gid)
+                self.resolve_group_cancel_requested(gid, "cancelled")
+            else:
+                if self.status_of(row["id"]) == "cancel_requested":
+                    self.set_cancelled(row["id"], "cancelled")
 
     def claim(self) -> dict[str, Any] | None:
         """Atomically claim the oldest queued job (IMMEDIATE txn)."""
@@ -120,6 +152,40 @@ class Store:
             (now, job_id),
         )
         return True
+
+    def requeue_for_shutdown(self, job_id: str) -> bool:
+        """Return a still-running job to 'queued' on graceful shutdown, WITHOUT counting an
+        attempt.
+
+        A SIGTERM-driven drain is not a job failure — the job never got to finish — so unlike
+        requeue() (child crash/timeout) it must not increment attempts, or repeated container
+        restarts during one slow job would burn through MAX_ATTEMPTS and poison a healthy job.
+        Guarded on the live, non-terminal states a job can hold mid-run
+        ('queued'/'processing'/'saving') so it never clobbers a result the child already
+        committed — and pointedly NOT 'cancel_requested': a user's pending cancel must resolve to
+        'cancelled' on drain (via resolve_group_cancel_requested), not be silently requeued and
+        run to completion after restart. Returns whether it re-queued."""
+        now = time.time()
+        cur = self.conn.execute(
+            "UPDATE jobs SET status='queued', heartbeat_at=NULL, updated_at=? "
+            "WHERE id=? AND status IN ('queued','processing','saving')",
+            (now, job_id),
+        )
+        return bool(cur.rowcount)
+
+    def set_processing(self, job_id: str) -> None:
+        """Promote a still-queued group sibling to 'processing'.
+
+        A VL dual export (markdown+word) recognizes the PDF ONCE and mirrors that progress onto
+        both group members, but only the claimed job is flipped to 'processing' by claim(). The
+        sibling would otherwise sit at status='queued' while its progress row shows live
+        recognition — an inconsistency every consumer (SPA badge, REST, MCP) sees. Guarded on
+        'queued' so it never resurrects a terminal job or clobbers a 'cancel_requested' one."""
+        now = time.time()
+        self.conn.execute(
+            "UPDATE jobs SET status='processing', heartbeat_at=?, updated_at=? WHERE id=? AND status='queued'",
+            (now, now, job_id),
+        )
 
     def heartbeat(self, active_model: str | None, gpu: dict[str, Any]) -> None:
         self.conn.execute(
@@ -189,6 +255,46 @@ class Store:
         except Exception:
             self.conn.execute("ROLLBACK")
             raise
+
+    def resolve_group_cancel_requested(self, group_id: str | None, message: str) -> list[str]:
+        """Terminate EVERY still-'cancel_requested' member of a group to 'cancelled'.
+
+        The supervisor's wedge-kill cancel path SIGKILLs the child before its own group-wide
+        Cancelled handler (child.py) can run, so a dual export (markdown+word share one VL pass
+        via group_id) leaves the un-claimed sibling stuck at 'cancel_requested' forever — a
+        non-terminal state no reap/claim/gc ever resolves, leaking a phantom active job and
+        pinning the shared upload. Resolve the whole group here, mirroring child.py's handler.
+
+        Guarded on `status='cancel_requested'` (the terminal-guard idiom used across this
+        module): never clobbers a sibling that already committed a 'done'/'error' result, and
+        it is a no-op when the child self-cancelled it first. Returns the ids actually flipped.
+        A NULL group_id (single-export job) matches nothing here — the caller's own
+        set_cancelled covers that case. Each row's jobs.status + progress commit atomically."""
+        if not group_id:
+            return []
+        rows = self.conn.execute(
+            "SELECT id FROM jobs WHERE group_id=? AND status='cancel_requested'",
+            (group_id,),
+        ).fetchall()
+        now = time.time()
+        flipped: list[str] = []
+        for row in rows:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                # Re-assert the guard inside the txn: a concurrent worker/child commit could have
+                # moved this row terminal between the SELECT above and here.
+                cur = self.conn.execute(
+                    "UPDATE jobs SET status='cancelled', updated_at=? WHERE id=? AND status='cancel_requested'",
+                    (now, row["id"]),
+                )
+                if cur.rowcount:
+                    self._progress_stmts(row["id"], 0, 0, "cancelled", message)
+                    flipped.append(row["id"])
+                self.conn.execute("COMMIT")
+            except Exception:
+                self.conn.execute("ROLLBACK")
+                raise
+        return flipped
 
     def status_of(self, job_id: str) -> str | None:
         row = self.conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()

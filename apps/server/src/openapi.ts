@@ -1,4 +1,4 @@
-import { CreateJobsResponse, ErrorResponse, HealthResponse, Job } from "@pdf-ocr/shared";
+import { CreateJobsResponse, ErrorResponse, HealthResponse, Job } from "@pdf-converter/shared";
 import { z } from "zod";
 
 /**
@@ -16,10 +16,10 @@ export function buildOpenApiDoc(): Record<string, unknown> {
   return {
     openapi: "3.1.0",
     info: {
-      title: "PDF OCR API",
+      title: "PDF Converter API",
       version: "1.0.0",
       description:
-        "Self-hosted GPU OCR. Upload PDFs and convert to searchable PDF, Markdown, or Word " +
+        "Self-hosted GPU PDF converter. Upload PDFs and convert to searchable PDF, Markdown, or Word " +
         "(PaddleOCR 3.7 / PaddleOCR-VL). Jobs are async: submit, then poll GET /jobs/{id} " +
         "(or stream GET /jobs/{id}/events) until status is 'done', then GET /download/{id}.",
     },
@@ -165,7 +165,7 @@ export function buildOpenApiDoc(): Record<string, unknown> {
 }
 
 export const SWAGGER_HTML = `<!doctype html>
-<html><head><meta charset="utf-8"><title>PDF OCR API</title>
+<html><head><meta charset="utf-8"><title>PDF Converter API</title>
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css"></head>
 <body><div id="swagger-ui"></div>
 <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>

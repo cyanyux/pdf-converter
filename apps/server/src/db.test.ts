@@ -39,3 +39,24 @@ test("requestCancel on a queued job cancels it; remove deletes it", () => {
   expect(s.get(id)).toBe(null);
   s.close();
 });
+
+test("requestCancel on a running job asks it to stop", () => {
+  const s = newStore();
+  const id = s.enqueue({ mode: "pdf", filename: "c.pdf", locale: "en", uploadPath: "/tmp/c.pdf" });
+  // Simulate the worker having claimed the job (queued -> processing).
+  s.db.prepare("UPDATE jobs SET status='processing' WHERE id=?").run(id);
+  expect(s.requestCancel(id)).toBe("cancel_requested");
+  expect(s.get(id)?.status).toBe("cancel_requested");
+  s.close();
+});
+
+test("requestCancel does not clobber a terminal status the worker committed", () => {
+  const s = newStore();
+  const id = s.enqueue({ mode: "pdf", filename: "d.pdf", locale: "en", uploadPath: "/tmp/d.pdf" });
+  // Stand in for the worker committing 'done' on its own connection just before the
+  // cancel lands: the terminal-guarded UPDATE must leave the row terminal and report it.
+  s.db.prepare("UPDATE jobs SET status='done' WHERE id=?").run(id);
+  expect(s.requestCancel(id)).toBe("done");
+  expect(s.get(id)?.status).toBe("done");
+  s.close();
+});

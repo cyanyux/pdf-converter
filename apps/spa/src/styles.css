@@ -482,6 +482,25 @@ body {
   font-size: 0.85rem;
   color: var(--ink-muted);
 }
+/* Muted chip showing which backend the worker routed this job to. */
+.job-engine-chip {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+  background: var(--paper-dark);
+  border-radius: 3px;
+  vertical-align: middle;
+}
+/* Informational line (e.g. source PDF was already searchable). */
+.job-notice {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  color: var(--info);
+}
 .job-buttons {
   display: flex;
   gap: 8px;
@@ -528,6 +547,68 @@ body {
   border-radius: 4px;
   color: var(--error);
   margin-bottom: 14px;
+}
+
+.banner-reconnecting {
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  background: var(--warning-light);
+  border-radius: 4px;
+  color: var(--warning);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+.skipped-notice {
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  background: var(--warning-light);
+  border-radius: 4px;
+  color: var(--warning);
+}
+.skipped-notice-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-weight: 500;
+}
+.skipped-notice-dismiss {
+  padding: 4px 12px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--warning);
+  background: transparent;
+  border: 1px solid var(--warning);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.skipped-notice-dismiss:hover {
+  background: var(--warning);
+  color: white;
+}
+.skipped-notice-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.skipped-notice-list li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.85rem;
+}
+.skipped-notice-name {
+  color: var(--ink-light);
+  word-break: break-all;
+}
+.skipped-notice-reason {
+  flex-shrink: 0;
 }
 
 .toast-container {
