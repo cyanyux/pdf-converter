@@ -12,9 +12,10 @@ import logging
 import subprocess
 from typing import Any
 
-import numpy as np
-import paddle
-
+# paddle (and numpy alongside it) is imported lazily inside the functions that need it:
+# this module is also imported by the SUPERVISOR (run.py) purely for gpu_info(), and a
+# module-level `import paddle` would map the whole ~2.5 GB paddle+opencv stack into a
+# process that never runs inference. Only model children may pay that cost.
 from . import config
 
 log = logging.getLogger("worker.models")
@@ -37,6 +38,8 @@ def _gpu_target(dev: str) -> str:
 
 def set_device() -> bool:
     """Select the runtime device; returns True if on GPU."""
+    import paddle
+
     dev = _norm_device()
     if _is_cpu(dev) or not paddle.is_compiled_with_cuda():  # type: ignore[attr-defined]
         paddle.set_device("cpu")  # type: ignore[attr-defined]
@@ -82,11 +85,15 @@ def build_ocr() -> Any:
         backend, but resolves to Paddle for PP-OCRv6 — it only helps older models such as
         PP-OCRv5_server).
     """
+    import numpy as np
+    import paddle
     from paddleocr import PaddleOCR
 
     dev = _norm_device()
     on_gpu = not _is_cpu(dev) and paddle.is_compiled_with_cuda()  # type: ignore[attr-defined]
-    device = "cpu" if _is_cpu(dev) else _gpu_target(dev)
+    # Derive the device from on_gpu (not just _is_cpu) so a GPU request on a non-CUDA build
+    # resolves to "cpu" — matching set_device()'s own fallback instead of passing "gpu:0".
+    device = _gpu_target(dev) if on_gpu else "cpu"
     kwargs: dict[str, Any] = {
         "ocr_version": config.OCR_VERSION,
         "use_doc_orientation_classify": False,
@@ -96,6 +103,10 @@ def build_ocr() -> Any:
         "text_det_limit_side_len": 960,
         "text_det_thresh": 0.25,
         "text_det_box_thresh": 0.5,
+        # A PaddleOCR common arg (parse_common_args). It only binds the Paddle CPU inference path
+        # (device='cpu'); on the GPU/ONNX path it is a harmless no-op. Wired so a CPU-only deploy
+        # (PDF_CONVERTER_DEVICE=cpu) can tune its thread count instead of the config key being dead.
+        "cpu_threads": config.CPU_THREADS,
         "device": device,
     }
 
@@ -103,9 +114,14 @@ def build_ocr() -> Any:
     if on_gpu and config.OCR_ENGINE == "onnxruntime":
         try:
             log.info("building PaddleOCR (%s, engine=onnxruntime)", config.OCR_VERSION)
-            return PaddleOCR(engine="onnxruntime", **kwargs)
+            ocr = PaddleOCR(engine="onnxruntime", **kwargs)
+            # Probe a real predict: a broken CUDAExecutionProvider can construct the session
+            # yet fail on first inference. Catching it here falls back to Paddle, instead of
+            # silently shipping text-less "searchable" PDFs once a job is already running.
+            ocr.predict(np.full((32, 32, 3), 255, dtype=np.uint8))
+            return ocr
         except Exception as e:
-            # Needs onnxruntime-gpu + paddle2onnx; fall through to Paddle if missing.
+            # Needs a working onnxruntime-gpu + paddle2onnx; fall through to Paddle otherwise.
             log.warning("ONNX Runtime engine unavailable (%s); falling back to Paddle", e)
 
     # Optional HPI on the Paddle path (helps PP-OCRv5, not v6).
@@ -125,7 +141,7 @@ def build_vl() -> Any:
     from paddleocr import PaddleOCRVL
 
     # Normalize DEVICE exactly as set_device()/build_ocr() do, so VL and PP-OCR resolve the
-    # same device string for every accepted PDF_OCR_DEVICE spelling ('gpu', 'cuda', 'auto',
+    # same device string for every accepted PDF_CONVERTER_DEVICE spelling ('gpu', 'cuda', 'auto',
     # '', ' gpu:0 '); passing raw config.DEVICE would desync VL from the PP-OCR path.
     dev = _norm_device()
     kwargs: dict[str, Any] = {
@@ -140,6 +156,8 @@ def build_vl() -> Any:
 
 
 def warmup_ocr(ocr: Any) -> None:
+    import numpy as np
+
     try:
         blank = np.full((320, 320, 3), 255, dtype=np.uint8)
         ocr.predict(blank)
