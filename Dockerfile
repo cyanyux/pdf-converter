@@ -62,10 +62,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
       --index-url https://www.paddlepaddle.org.cn/packages/stable/cu126/ \
       --extra-index-url https://pypi.org/simple/
 # PaddleOCR 3.7 stack (PP-OCRv6 searchable-PDF + PaddleOCR-VL doc-parse) + doc utilities.
+# opencc: Simplified->Traditional (Taiwan) conversion for zh-TW output (text_utils._s2tw). paddlex
+# declares it ONLY under its base/speech extras, and we install the doc-parser extra, so it is NOT
+# pulled transitively — it must be listed explicitly or zh-TW jobs fail with "No module named 'opencc'".
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /opt/venv/bin/python \
       "paddleocr[doc-parser]==3.7.0" pymupdf==1.28.0 python-docx==1.2.0 \
-      docxcompose beautifulsoup4==4.15.0 "numpy<2.4"
+      docxcompose beautifulsoup4==4.15.0 "numpy<2.4" opencc==1.4.0
 # ONNX Runtime engine for PP-OCR (paddle2onnx export + onnxruntime-gpu): ~1.14x faster than
 # native Paddle on PP-OCRv6, identical output. Separate layer so the big paddle layers stay
 # cached. Selected via PDF_CONVERTER_ENGINE=onnxruntime (default); auto-falls back to Paddle.
